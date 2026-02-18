@@ -90,6 +90,9 @@ async def search(
     """Search the web and return deduplicated, scored results."""
     start = time.time()
 
+    if not q or not q.strip():
+        raise HTTPException(status_code=400, detail="Query parameter 'q' cannot be empty")
+
     # Check cache
     cached = cache.get(q, engines or "", count)
     if cached is not None:
