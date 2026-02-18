@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.env
+.venv/
+venv/
+*.egg
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+searxng/uwsgi.ini
