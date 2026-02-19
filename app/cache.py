@@ -25,6 +25,7 @@ class Cache:
     """
 
     ttl: int = 3600
+    max_size: int = 1000
     _store: dict[str, CacheEntry] = field(default_factory=dict)
 
     @staticmethod
@@ -47,6 +48,10 @@ class Cache:
     def set(self, query: str, engines: str, count: int, value: Any) -> None:
         """Cache a value with TTL."""
         key = self._key(query, engines, count)
+        # Evict oldest if over limit
+        if len(self._store) >= self.max_size:
+            oldest_key = min(self._store, key=lambda k: self._store[k].expires_at)
+            del self._store[oldest_key]
         self._store[key] = CacheEntry(value=value, expires_at=time.time() + self.ttl)
 
     def clear(self) -> None:

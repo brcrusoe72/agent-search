@@ -53,10 +53,30 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost", "http://127.0.0.1"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- Rate Limiting ---
+from collections import defaultdict
+import asyncio
+
+_rate_store: dict[str, list[float]] = defaultdict(list)
+RATE_LIMIT_RPM = int(os.getenv("RATE_LIMIT", "60"))
+
+@app.middleware("http")
+async def rate_limit_middleware(request, call_next):
+    """Simple per-IP rate limiter."""
+    client_ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    # Clean old entries
+    _rate_store[client_ip] = [t for t in _rate_store[client_ip] if now - t < 60]
+    if len(_rate_store[client_ip]) >= RATE_LIMIT_RPM:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"})
+    _rate_store[client_ip].append(now)
+    return await call_next(request)
 
 
 async def _query_searxng(
@@ -92,6 +112,8 @@ async def search(
 
     if not q or not q.strip():
         raise HTTPException(status_code=400, detail="Query parameter 'q' cannot be empty")
+    if len(q) > 500:
+        raise HTTPException(status_code=400, detail="Query too long (max 500 chars)")
 
     # Check cache
     cached = cache.get(q, engines or "", count)
