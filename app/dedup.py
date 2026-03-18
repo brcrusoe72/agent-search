@@ -8,6 +8,20 @@ from urllib.parse import urlparse
 from app.models import SearchResult
 
 
+# Domain authority scores
+DOMAIN_AUTHORITY = {
+    'arxiv.org': 0.9,
+    'wikipedia.org': 0.9,
+    'github.com': 0.8,
+    'stackoverflow.com': 0.8,
+    'docs.python.org': 0.8,
+    'developer.mozilla.org': 0.8,
+    'medium.com': 0.5,
+    'reddit.com': 0.4,
+    'quora.com': 0.3,
+}
+
+
 def _normalize_url(url: str) -> str:
     """Normalize URL for dedup comparison (strip trailing slash, www, fragments)."""
     parsed = urlparse(url)
@@ -69,4 +83,75 @@ def deduplicate(raw_results: list[dict]) -> list[SearchResult]:
             )
         )
 
+    return results
+
+
+def deduplicate_with_scoring(raw_results: list[dict]) -> list[SearchResult]:
+    """Enhanced deduplication with domain authority and position scoring."""
+    seen: dict[str, dict] = {}
+    
+    for i, r in enumerate(raw_results):
+        url = r.get("url", "")
+        if not url:
+            continue
+
+        norm = _normalize_url(url)
+        engines = r.get("engines", [])
+        if isinstance(engines, str):
+            engines = [engines]
+
+        if norm in seen:
+            existing = seen[norm]
+            # Merge engines
+            for e in engines:
+                if e not in existing["engines"]:
+                    existing["engines"].append(e)
+            # Keep longer snippet
+            snippet = r.get("content", r.get("snippet", ""))
+            if len(snippet) > len(existing["snippet"]):
+                existing["snippet"] = snippet
+            # Keep best position
+            existing["best_position"] = min(existing.get("best_position", i), i)
+        else:
+            seen[norm] = {
+                "title": r.get("title", ""),
+                "url": url,
+                "snippet": r.get("content", r.get("snippet", "")),
+                "engines": list(engines),
+                "best_position": i,
+            }
+
+    # Calculate enhanced scores
+    results: list[SearchResult] = []
+    
+    for item in seen.values():
+        # Engine agreement score (0-1)
+        engine_score = len(item["engines"]) / len(set().union(*(r.get("engines", []) if isinstance(r.get("engines"), list) else [r.get("engines", "")] for r in raw_results if r.get("engines"))))
+        
+        # Domain authority score (0-1)
+        domain = urlparse(item["url"]).netloc.lower()
+        domain_score = DOMAIN_AUTHORITY.get(domain, 0.2)  # Default low score for unknown domains
+        
+        # Position score (0-1, higher for better positions)
+        position_score = 1.0 / (1.0 + item["best_position"] / 10.0)
+        
+        # Combined score
+        final_score = (engine_score * 0.4) + (domain_score * 0.3) + (position_score * 0.3)
+        
+        results.append(
+            SearchResult(
+                title=item["title"],
+                url=item["url"],
+                snippet=item["snippet"],
+                engines=item["engines"],
+                score=round(final_score, 3),
+                position=0,  # Will be set after sorting
+            )
+        )
+    
+    # Sort by score and set positions
+    results.sort(key=lambda x: x.score, reverse=True)
+    for i, result in enumerate(results):
+        result.position = i + 1
+    
     return results

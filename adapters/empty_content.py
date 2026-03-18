@@ -1,0 +1,51 @@
+"""Adapter for pages that return HTML but with empty/minimal content.
+
+Uses readability-style scoring to find the real content block.
+"""
+
+import requests
+from bs4 import BeautifulSoup
+
+MIN_CHARS = 300
+MAX_CHARS = 15000
+
+
+def fetch_content(url: str) -> str | None:
+    """Extract content from pages with poor HTML structure."""
+    try:
+        r = requests.get(
+            url,
+            timeout=15,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; AgentSearch/2.0)"},
+            allow_redirects=True,
+        )
+        if not r.ok:
+            return None
+
+        # Try multiple parsers
+        for parser in ["html.parser", "lxml", "html5lib"]:
+            try:
+                soup = BeautifulSoup(r.text, parser)
+            except Exception:
+                continue
+
+            for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
+                tag.decompose()
+
+            # Score all text-containing blocks
+            candidates = []
+            for el in soup.find_all(["div", "article", "section", "main", "td", "p"]):
+                text = el.get_text(strip=True)
+                if len(text) < MIN_CHARS:
+                    continue
+                p_count = len(el.find_all("p"))
+                score = len(text) + (p_count * 50)
+                candidates.append((score, text))
+
+            if candidates:
+                candidates.sort(reverse=True)
+                return candidates[0][1][:MAX_CHARS]
+
+        return None
+    except Exception:
+        return None

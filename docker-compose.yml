@@ -14,13 +14,17 @@ services:
     build: .
     container_name: agent-search-api
     ports:
-      - "3939:3939"
+      - "127.0.0.1:3939:3939"
     environment:
       - SEARXNG_URL=http://searxng:8080
       - CACHE_TTL=3600
-      - RATE_LIMIT=30
+      - RATE_LIMIT=60
+      - ADAPTERS_DIR=/app/adapters
     depends_on:
       - searxng
+    volumes:
+      - agent-search-data:/app/data
+      - ./adapters:/app/adapters:ro
     networks:
       - agent-search
     restart: unless-stopped
@@ -28,3 +32,6 @@ services:
 networks:
   agent-search:
     driver: bridge
+
+volumes:
+  agent-search-data:

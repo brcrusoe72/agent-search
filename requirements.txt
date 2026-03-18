@@ -2,3 +2,8 @@ fastapi==0.115.6
 uvicorn[standard]==0.34.0
 httpx==0.28.1
 pydantic==2.10.4
+beautifulsoup4==4.12.2
+pdfplumber==0.11.0
+lxml==5.1.0
+requests==2.32.3
+yt-dlp

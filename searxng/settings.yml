@@ -13,7 +13,7 @@ search:
     - json
 
 server:
-  secret_key: "a793e93874049148e1556b02923dce508ba193f91e9684b13d2bd135e7388453"
+  secret_key: "REDACTED_SECRET"
   limiter: false
   image_proxy: false
   port: 8080
@@ -51,4 +51,29 @@ engines:
   - name: wikipedia
     engine: wikipedia
     shortcut: w
+    disabled: false
+
+  - name: huggingface
+    engine: huggingface
+    shortcut: hf
+    disabled: false
+
+  - name: reddit
+    engine: reddit
+    shortcut: re
+    disabled: false
+
+  - name: hackernews
+    engine: hackernews
+    shortcut: hn
+    disabled: false
+
+  - name: crowdview
+    engine: crowdview
+    shortcut: cv
+    disabled: false
+
+  - name: lobsters
+    engine: lobsters
+    shortcut: lo
     disabled: false
