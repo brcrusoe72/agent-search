@@ -314,6 +314,127 @@ async def search_deep(
     )
 
 
+@app.get("/search/policy", response_model=SearchResponse)
+async def search_policy(
+    q: str = Query(..., description="Policy/geopolitical search query"),
+    count: int = Query(10, ge=1, le=50, description="Number of results"),
+    fetch: bool = Query(False, description="Fetch page content via kill chain"),
+) -> SearchResponse:
+    """Policy-optimized search: domain quality ranking, junk filtering, source library.
+
+    Enhances standard search with:
+    1. Source library lookup — returns curated URLs for known topics
+    2. Query enhancement — appends analytical terms to avoid homepages
+    3. Domain quality re-ranking — boosts think tanks, penalizes junk
+    4. Junk filtering — removes dictionaries, tourism, gaming results
+    """
+    from app.source_library import get_sources, rank_results, filter_junk
+
+    start = time.time()
+
+    if not q or not q.strip():
+        raise HTTPException(status_code=400, detail="Query parameter 'q' cannot be empty")
+
+    # Step 1: Check source library for curated URLs
+    library_sources = get_sources(q)
+    library_results = []
+    if library_sources:
+        for src in library_sources[:5]:  # Top 5 curated sources
+            library_results.append(SearchResult(
+                title=f"[Library] {src.get('institution', '')}: {src.get('title', '')}",
+                url=src["url"],
+                snippet=f"Curated source from {src.get('institution', '')}. {src.get('date', '')}",
+                engines=["source_library"],
+                score=1.0,
+                position=0,
+                content=None,
+            ))
+
+    # Step 2: Enhanced search queries
+    enhanced_queries = [q]
+    q_lower = q.lower()
+    # Add analytical terms if not already present
+    if not any(term in q_lower for term in ["analysis", "assessment", "report", "implications", "strategy"]):
+        enhanced_queries.append(f"{q} analysis assessment")
+    # Add think tank search
+    enhanced_queries.append(f"{q} CSIS RAND Brookings CFR")
+
+    # Step 3: Run searches
+    async def _search_one(query: str) -> list[dict]:
+        try:
+            return await _query_searxng(query, count * 2)
+        except httpx.HTTPError:
+            return []
+
+    all_raw = await asyncio.gather(*[_search_one(v) for v in enhanced_queries])
+
+    combined = []
+    for result_set in all_raw:
+        if isinstance(result_set, list):
+            combined.extend(result_set)
+
+    results = deduplicate_with_scoring(combined)
+
+    # Step 4: Filter junk results
+    results_dicts = [{"url": r.url, "title": r.title, "score": r.score, "snippet": r.snippet, "engines": r.engines} for r in results]
+    results_dicts = filter_junk(results_dicts)
+
+    # Step 5: Re-rank by domain quality
+    results_dicts = rank_results(results_dicts)
+
+    # Convert back to SearchResult objects
+    search_results = []
+    for rd in results_dicts[:count]:
+        search_results.append(SearchResult(
+            title=rd.get("title", ""),
+            url=rd.get("url", ""),
+            snippet=rd.get("snippet", ""),
+            engines=rd.get("engines", []),
+            score=rd.get("policy_score", rd.get("score", 0.5)),
+            position=0,
+            content=None,
+        ))
+
+    # Prepend library results (they always come first)
+    all_results = library_results + search_results
+    all_results = all_results[:count]
+
+    # Fetch content if requested
+    if fetch and all_results:
+        assert http_client is not None
+        kc_results = await kill_chain_batch(
+            http_client,
+            [r.url for r in all_results],
+            searxng_url=SEARXNG_URL,
+            content_cache=content_cache,
+            max_concurrent=5,
+        )
+        for result, kc in zip(all_results, kc_results):
+            result.content = kc.content
+            if content_cache:
+                await content_cache.log_fetch(
+                    kc.url, kc.strategy, kc.success, kc.chars,
+                    kc.strategies_tried, kc.error,
+                )
+
+    engines_used = list({e for r in all_results for e in r.engines})
+    elapsed = round((time.time() - start) * 1000, 1)
+
+    await query_db.log_query(q, engines_used, len(all_results), elapsed)
+
+    return SearchResponse(
+        results=all_results,
+        meta=SearchMeta(
+            query=q,
+            total=len(all_results),
+            engines_used=engines_used,
+            cached=False,
+            response_time_ms=elapsed,
+            queries_used=enhanced_queries,
+        ),
+    )
+
+
 @app.get("/search/stats", response_model=SearchStats)
 async def search_stats() -> SearchStats:
     """Get search query statistics and engine performance."""

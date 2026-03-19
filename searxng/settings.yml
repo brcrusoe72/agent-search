@@ -23,36 +23,107 @@ ui:
   static_use_hash: true
 
 engines:
+  # === PRIMARY SEARCH ===
   - name: google
     engine: google
     shortcut: g
     disabled: false
-
-  - name: bing
-    engine: bing
-    shortcut: b
-    disabled: false
-
-  - name: duckduckgo
-    engine: duckduckgo
-    shortcut: ddg
-    disabled: false
-
-  - name: brave
-    engine: brave
-    shortcut: br
-    disabled: false
+    weight: 1.5
 
   - name: startpage
     engine: startpage
     shortcut: sp
     disabled: false
+    weight: 1.3
 
+  - name: brave
+    engine: brave
+    shortcut: br
+    disabled: false
+    weight: 1.2
+
+  - name: bing
+    engine: bing
+    shortcut: b
+    disabled: false
+    weight: 0.8
+
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    disabled: false
+    weight: 1.0
+
+  # === SCHOLARLY / ACADEMIC ===
+  - name: google scholar
+    engine: google_scholar
+    shortcut: gs
+    disabled: false
+    weight: 1.4
+
+  - name: semantic scholar
+    engine: semantic_scholar
+    shortcut: ss
+    disabled: false
+    weight: 1.2
+
+  - name: arxiv
+    engine: arxiv
+    shortcut: ax
+    disabled: false
+
+  - name: crossref
+    engine: crossref
+    shortcut: cr
+    disabled: false
+    weight: 1.1
+
+  - name: openalex
+    engine: openalex
+    shortcut: oa
+    disabled: false
+    weight: 1.1
+
+  - name: pubmed
+    engine: pubmed
+    shortcut: pm
+    disabled: false
+
+  # === NEWS ===
+  - name: google news
+    engine: google_news
+    shortcut: gn
+    disabled: false
+    weight: 1.3
+
+  - name: bing news
+    engine: bing_news
+    shortcut: bn
+    disabled: false
+
+  - name: yahoo news
+    engine: yahoo_news
+    shortcut: yn
+    disabled: false
+
+  - name: wikinews
+    engine: wikinews
+    shortcut: wn
+    disabled: false
+
+  # === REFERENCE ===
   - name: wikipedia
     engine: wikipedia
     shortcut: w
     disabled: false
+    weight: 0.5
 
+  - name: wikidata
+    engine: wikidata
+    shortcut: wd
+    disabled: false
+
+  # === COMMUNITY / TECH ===
   - name: huggingface
     engine: huggingface
     shortcut: hf
@@ -68,9 +139,14 @@ engines:
     shortcut: hn
     disabled: false
 
-  - name: crowdview
-    engine: crowdview
-    shortcut: cv
+  - name: stackoverflow
+    engine: stackoverflow
+    shortcut: so
+    disabled: false
+
+  - name: github
+    engine: github
+    shortcut: gh
     disabled: false
 
   - name: lobsters
