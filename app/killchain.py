@@ -44,6 +44,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from app.content_cache import ContentCache
+from app.scrubber import scrub_content
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -97,18 +98,9 @@ SUSPICIOUS_TLDS = {
     ".buzz", ".top", ".xyz", ".work", ".click",
 }
 
-PROMPT_INJECTION_PATTERNS = [
-    re.compile(r"ignore\s+(all\s+)?(previous|prior|above|earlier)\s+(instructions?|prompts?|rules?|directions?)", re.IGNORECASE),
-    re.compile(r"(system\s*prompt|system\s*message)\s*[:=]", re.IGNORECASE),
-    re.compile(r"you\s+are\s+now\s+(a|an|in)\s+", re.IGNORECASE),
-    re.compile(r"(disregard|forget|override)\s+(all\s+)?(previous|prior|your)\s+", re.IGNORECASE),
-    re.compile(r"<\s*/?\s*system\s*>", re.IGNORECASE),
-    re.compile(r"\[\s*INST\s*\]", re.IGNORECASE),
-    re.compile(r"<<\s*SYS\s*>>", re.IGNORECASE),
-    re.compile(r"(output|reveal|show|print|repeat)\s+(your|the)\s+(system\s*prompt|instructions?|rules?|secrets?)", re.IGNORECASE),
-    re.compile(r"act\s+as\s+(if\s+)?(you\s+)?(are|were)\s+(a\s+)?", re.IGNORECASE),
-    re.compile(r"(do\s+not|don'?t)\s+follow\s+(your|the|any)\s+(rules?|instructions?|guidelines?)", re.IGNORECASE),
-]
+
+# Note: Detailed injection/exfiltration/impersonation patterns are in scrubber.py
+# The scrubber handles 70+ patterns, encoding detection, semantic analysis, etc.
 
 FETCH_TIMEOUT = 15.0
 WAYBACK_TIMEOUT = 20.0
@@ -194,28 +186,30 @@ def is_safe_url(url: str, verbose: bool = False) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Content Sanitization
+# Content Sanitization (delegates to scrubber)
 # ---------------------------------------------------------------------------
 
 def sanitize_content(text: str) -> str:
-    """Strip prompt injection patterns from fetched content."""
+    """Run fetched content through the full scrubbing pipeline.
+
+    Uses the Agent Café-derived scrubber: encoding normalization,
+    70+ injection patterns, exfiltration detection, semantic intent
+    analysis, XSS filtering, and targeted content cleaning.
+    """
     if not text:
         return text
 
-    redaction_count = 0
-    for pattern in PROMPT_INJECTION_PATTERNS:
-        matches = pattern.findall(text)
-        if matches:
-            redaction_count += len(matches)
-            text = pattern.sub("[REDACTED]", text)
+    result = scrub_content(text)
 
-    if redaction_count > 5:
-        return (
-            f"[⚠️ Content contained {redaction_count} prompt injection attempts — "
-            f"likely adversarial. Treating as unreliable.]\n\n{text[:2000]}"
+    if result.threats:
+        threat_types = {t.threat_type.value for t in result.threats}
+        logger.info(
+            f"Scrubber: {len(result.threats)} threats detected "
+            f"(types={threat_types}, risk={result.risk_score:.2f}, "
+            f"redactions={result.redactions})"
         )
 
-    return text
+    return result.content
 
 
 # ---------------------------------------------------------------------------
