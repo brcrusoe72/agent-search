@@ -12,8 +12,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app/ ./app/
 
-# Create data and adapters directories
-RUN mkdir -p /app/data /app/adapters
+# Copy adapters and create data directory
+COPY adapters/ ./adapters/
+RUN mkdir -p /app/data
 
 EXPOSE 3939
 

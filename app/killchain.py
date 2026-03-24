@@ -91,6 +91,7 @@ MAX_CONTENT_CHARS = 15_000
 BLOCKED_FETCH_DOMAINS = {
     "bit.ly", "tinyurl.com", "t.co", "goo.gl", "ow.ly",
     "buff.ly", "is.gd", "v.gd", "short.io",
+    "media.defense.gov",  # 0% success rate — DoD site blocks all scraping
 }
 
 SUSPICIOUS_TLDS = {
@@ -103,6 +104,7 @@ SUSPICIOUS_TLDS = {
 # The scrubber handles 70+ patterns, encoding detection, semantic analysis, etc.
 
 FETCH_TIMEOUT = 15.0
+MIN_USEFUL_CHARS = 200  # Content shorter than this is probably garbage
 WAYBACK_TIMEOUT = 20.0
 YT_DLP_TIMEOUT = 60
 
@@ -261,6 +263,45 @@ def _is_pdf_url(url: str) -> bool:
 # ---------------------------------------------------------------------------
 # Adapter Loading
 # ---------------------------------------------------------------------------
+
+def _load_cloudflare_adapter():
+    """Load the Cloudflare bypass adapter if available."""
+    path = ADAPTERS_DIR / "cloudflare_bypass.py"
+    if not path.exists():
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location("adapter_cloudflare", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod  # returns module with can_handle() and extract()
+    except Exception as e:
+        logger.warning(f"Failed to load cloudflare adapter: {e}")
+        return None
+
+
+async def _strategy_cloudflare(cf_mod, url: str) -> Optional[str]:
+    """Run the Cloudflare bypass adapter's async extract."""
+    try:
+        result = await cf_mod.extract(url, timeout=30)
+        if result and result.get("success") and result.get("content"):
+            content = result["content"]
+            strategy = result.get("strategy", "cloudflare-bypass")
+            logger.info(f"[{strategy}] Cloudflare bypass succeeded for {urlparse(url).netloc}")
+            # Parse HTML to text if needed
+            if "<html" in content.lower()[:500]:
+                try:
+                    from bs4 import BeautifulSoup
+                    soup = BeautifulSoup(content, "html.parser")
+                    for tag in soup(["script", "style", "nav", "footer", "header"]):
+                        tag.decompose()
+                    content = soup.get_text(separator="\n", strip=True)
+                except Exception:
+                    pass
+            return content
+    except Exception as e:
+        logger.debug(f"Cloudflare bypass failed: {e}")
+    return None
+
 
 def _load_adapter(name: str):
     """Dynamically load an adapter from the adapters directory."""
@@ -615,24 +656,58 @@ async def kill_chain(
             error="PDF extraction failed",
         )
 
+    # Check if URL is a known Cloudflare-protected domain — try CF adapter early
+    _cf_adapter = None
+    try:
+        _cf_mod = _load_cloudflare_adapter()
+        if _cf_mod and _cf_mod.can_handle(url):
+            _cf_adapter = _cf_mod
+    except Exception:
+        pass
+
     # Web content: escalating strategies
     web_strategies = [
         ("direct", lambda: strategy_direct(client, url)),
         ("readability", lambda: strategy_readability(client, url)),
         ("ua-rotate", lambda: strategy_ua_rotation(client, url)),
+    ]
+
+    # If Cloudflare detected for this domain, insert CF adapter before wayback/cache
+    if _cf_adapter:
+        web_strategies.append(("cloudflare-bypass", lambda: _strategy_cloudflare(_cf_adapter, url)))
+
+    web_strategies.extend([
         ("wayback", lambda: strategy_wayback(client, url)),
         ("google-cache", lambda: strategy_google_cache(client, url)),
         ("search-about", lambda: strategy_search_about(client, url, searxng_url)),
         ("adapter-403", lambda: strategy_adapter(url, "403_forbidden")),
         ("adapter-empty", lambda: strategy_adapter(url, "empty_content")),
         ("adapter-parse", lambda: strategy_adapter(url, "parse_error")),
-    ]
+    ])
 
     for name, strategy_fn in web_strategies:
         strategies_tried.append(name)
         try:
             content = await strategy_fn()
             if content:
+                # Cloudflare detected mid-chain: if direct/readability/ua-rotate got a challenge
+                # page, try the CF adapter before giving up on this strategy
+                if not _cf_adapter and name in ("direct", "readability", "ua-rotate"):
+                    try:
+                        _cf_mod = _load_cloudflare_adapter()
+                        if _cf_mod and _cf_mod.can_handle(url, content=content):
+                            _cf_adapter = _cf_mod
+                            # Insert CF strategy right after current position
+                            logger.info(f"Cloudflare challenge detected on {urlparse(url).netloc}, engaging bypass")
+                            cf_content = await _strategy_cloudflare(_cf_adapter, url)
+                            if cf_content:
+                                content = cf_content
+                                name = "cloudflare-bypass"
+                            else:
+                                continue  # Skip this challenge page
+                    except Exception:
+                        pass
+
                 # Check for accidental PDF content
                 if content.strip().startswith("%PDF"):
                     pdf_content = await strategy_pdf(url)
@@ -640,6 +715,12 @@ async def kill_chain(
                         content = pdf_content
 
                 content = sanitize_content(content)[:effective_max]
+
+                # Skip garbage — too short to be real content
+                if len(content.strip()) < MIN_USEFUL_CHARS:
+                    logger.debug(f"[{name}] Only {len(content.strip())} chars — below minimum, skipping")
+                    continue
+
                 logger.info(f"[{name}] {len(content):,} chars from {urlparse(url).netloc}")
 
                 if content_cache:
