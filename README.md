@@ -2,6 +2,8 @@
 
 **Free, self-hosted search API for AI agents.** Zero API keys. One command to deploy.
 
+[![PyPI](https://img.shields.io/pypi/v/agentsearch-client)](https://pypi.org/project/agentsearch-client/) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 AgentSearch wraps [SearXNG](https://github.com/searxng/searxng) (an open-source meta-search engine) with a clean FastAPI layer that returns structured JSON. Built for LLM agents, RAG pipelines, and anyone tired of paying per-query for search APIs.
 
 ## Why?
@@ -19,7 +21,7 @@ AgentSearch wraps [SearXNG](https://github.com/searxng/searxng) (an open-source 
 ## Quickstart
 
 ```bash
-git clone https://github.com/yourusername/agent-search.git
+git clone https://github.com/brcrusoe72/agent-search.git
 cd agent-search
 docker compose up -d
 ```
@@ -188,6 +190,28 @@ SEARXNG_URL=http://localhost:8080 uvicorn app.main:app --reload --port 3939
 3. Commit (`git commit -am 'Improve dedup algorithm'`)
 4. Push (`git push origin feature/better-dedup`)
 5. Open a PR
+
+## Python SDK
+
+```bash
+pip install agentsearch-client
+```
+
+```python
+from agentsearch import AgentSearch
+
+client = AgentSearch()  # defaults to localhost:3939
+results = client.search("manufacturing OEE best practices")
+for r in results:
+    print(f"{r.title} — {r.url}")
+```
+
+## Related Projects
+
+- **[Operations Intelligence Analyzer](https://github.com/brcrusoe72/operations-intelligence-analyzer)** — AI-powered OEE analysis ([live demo](https://oee.trueaicost.com))
+- **[Agent Café](https://github.com/brcrusoe72/agent-cafe)** — AI agent marketplace ([live at thecafe.dev](https://thecafe.dev))
+- **[Manufacturing Analyst Pro](https://github.com/brcrusoe72/manufacturing-analyst-pro)** — MES data analysis CLI
+- **[AI True Cost Calculator](https://trueaicost.com)** — Know what your AI project really costs
 
 ## License
 
