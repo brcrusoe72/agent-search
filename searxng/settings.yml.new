@@ -18,7 +18,6 @@ general:
   open_metrics: ''
 
 brand:
-  new_issue_url: https://github.com/searxng/searxng/issues/new
   docs_url: https://docs.searxng.org/
   public_instances: https://searx.space
   wiki_url: https://github.com/searxng/searxng/wiki
@@ -28,6 +27,15 @@ brand:
   #   links:
   #     Uptime: https://uptime.searxng.org/history/darmarit-org
   #     About: "https://searxng.org"
+  # pwa_colors:
+  #   # Custom settings for PWA icon an colors used in manifest.json
+  #   # Default colors are:
+  #    theme_color_light: "#3050ff"
+  #    background_color_light: "fff"
+  #    theme_color_dark: "#58f"
+  #    background_color_dark: "#222428"
+  #    theme_color_black: "#3050ff"
+  #    background_color_black: "#000"
 
 search:
   # Filter results. 0: None, 1: Moderate, 2: Strict
@@ -94,7 +102,7 @@ server:
   # If your instance owns a /etc/searxng/settings.yml file, then set the following
   # values there.
 
-  secret_key: "REDACTED"  # Is overwritten by ${SEARXNG_SECRET}
+  secret_key: "change-me"  # Override with SEARXNG_SECRET env var
   # Proxy image results through SearXNG. Is overwritten by ${SEARXNG_IMAGE_PROXY}
   image_proxy: false
   # 1.0 and 1.1 are supported
@@ -413,6 +421,24 @@ engines:
     shortcut: conda
     disabled: true
 
+  - name: aol
+    engine: aol
+    search_type: search
+    categories: [general]
+    shortcut: aol
+
+  - name: aol images
+    engine: aol
+    search_type: image
+    categories: [images]
+    shortcut: aoli
+
+  - name: aol videos
+    engine: aol
+    search_type: video
+    categories: [videos]
+    shortcut: aolv
+
   - name: arch linux wiki
     engine: archlinux
     shortcut: al
@@ -537,6 +563,11 @@ engines:
       use_official_api: false
       require_api_key: false
       results: HTML
+
+  - name: boardreader
+    engine: boardreader
+    shortcut: boa
+    disabled: true
 
   - name: bpb
     engine: bpb
@@ -1175,6 +1206,31 @@ engines:
     timeout: 3.0
     disabled: true
 
+  - name: karmasearch
+    engine: karmasearch
+    categories: [general, web]
+    search_type: web
+    shortcut: ka
+
+  - name: karmasearch images
+    engine: karmasearch
+    categories: [images, web]
+    search_type: images
+    shortcut: kai
+    paging: false
+
+  - name: karmasearch videos
+    engine: karmasearch
+    categories: [general, web]
+    search_type: videos
+    shortcut: kav
+
+  - name: karmasearch news
+    engine: karmasearch
+    categories: [news, web]
+    search_type: news
+    shortcut: kan
+
   - name: kickass
     engine: kickass
     base_url:
@@ -1791,24 +1847,6 @@ engines:
     shortcut: reu
     # https://docs.searxng.org/dev/engines/online/reuters.html
     # sort_order = "relevance"
-
-  - name: right dao
-    engine: xpath
-    paging: true
-    page_size: 12
-    search_url: https://rightdao.com/search?q={query}&start={pageno}
-    results_xpath: //div[contains(@class, "description")]
-    url_xpath: ../div[contains(@class, "title")]/a/@href
-    title_xpath: ../div[contains(@class, "title")]
-    content_xpath: .
-    categories: general
-    shortcut: rd
-    disabled: true
-    about:
-      website: https://rightdao.com/
-      use_official_api: false
-      require_api_key: false
-      results: HTML
 
   - name: rottentomatoes
     engine: rottentomatoes

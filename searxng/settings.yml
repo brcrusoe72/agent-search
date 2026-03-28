@@ -13,7 +13,7 @@ search:
     - json
 
 server:
-  secret_key: "REDACTED_SECRET"
+  secret_key: "change-me-override-with-SEARXNG_SECRET"
   limiter: false
   image_proxy: false
   port: 8080

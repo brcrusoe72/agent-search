@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentsearch-client"
+version = "0.1.0"
+description = "Python client for the AgentSearch API — self-hosted, multi-engine web search for AI agents and RAG pipelines."
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    { name = "Brian Crusoe", email = "brcrusoe72@gmail.com" },
+]
+keywords = [
+    "search-api",
+    "ai-agents",
+    "rag",
+    "llm-tools",
+    "self-hosted",
+    "web-search",
+    "meta-search",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+
+[project.optional-dependencies]
+fast = ["httpx>=0.24"]
+
+[project.urls]
+Homepage = "https://github.com/brcrusoe72/agent-search"
+Repository = "https://github.com/brcrusoe72/agent-search"
+Issues = "https://github.com/brcrusoe72/agent-search/issues"
+
+[tool.setuptools.packages.find]
+include = ["agentsearch*"]
