@@ -206,6 +206,29 @@ for r in results:
     print(f"{r.title} — {r.url}")
 ```
 
+## MCP Server
+
+Use AgentSearch as an [MCP](https://modelcontextprotocol.io) tool server — gives any MCP-compatible client (Claude Desktop, Cursor, etc.) access to all 6 tools over stdio.
+
+```bash
+pip install mcp httpx
+python mcp-server/server.py
+```
+
+Add to Claude Desktop config:
+```json
+{
+  "mcpServers": {
+    "agent-search": {
+      "command": "python",
+      "args": ["/path/to/mcp-server/server.py"]
+    }
+  }
+}
+```
+
+See [`mcp-server/README.md`](mcp-server/README.md) for full setup.
+
 ## Related Projects
 
 - **[Operations Intelligence Analyzer](https://github.com/brcrusoe72/operations-intelligence-analyzer)** — AI-powered OEE analysis ([live demo](https://oee.trueaicost.com))
