@@ -22,10 +22,12 @@ from typing import Optional
 from urllib.parse import urlparse
 
 import logging
+import os
 
 logger = logging.getLogger("agentsearch.evolver")
 
 ADAPTERS_DIR = Path("/app/adapters")
+DYNAMIC_BLOCKLIST_PATH = Path(os.getenv("DATA_DIR", "/app/data")) / "blocked_domains.txt"
 
 
 class Evolver:
@@ -234,6 +236,9 @@ class Evolver:
                 if f.stem != "__init__"
             ]
 
+        # Auto-apply safe recommendations
+        actions_taken = self.auto_apply(recommendations)
+
         return {
             "analyzed_at": time.time(),
             "period_days": days,
@@ -246,7 +251,40 @@ class Evolver:
             },
             "recommendations": recommendations,
             "existing_adapters": existing_adapters,
+            "actions_taken": actions_taken,
         }
+
+    def auto_apply(self, recommendations: list[dict]) -> list[str]:
+        """Auto-apply safe recommendations. Returns list of actions taken."""
+        actions = []
+
+        for rec in recommendations:
+            if rec["type"] == "block_domains" and rec["priority"] == "high":
+                # Auto-block domains with 0% success rate
+                existing = set()
+                try:
+                    if DYNAMIC_BLOCKLIST_PATH.exists():
+                        existing = {
+                            line.strip().lower()
+                            for line in DYNAMIC_BLOCKLIST_PATH.read_text().splitlines()
+                            if line.strip() and not line.startswith("#")
+                        }
+                except Exception:
+                    pass
+
+                new_domains = [d for d in rec["domains"] if d.lower() not in existing]
+                if new_domains:
+                    try:
+                        with open(DYNAMIC_BLOCKLIST_PATH, "a") as f:
+                            f.write(f"# Auto-blocked {time.strftime('%Y-%m-%d %H:%M')}\n")
+                            for d in new_domains:
+                                f.write(f"{d}\n")
+                        actions.append(f"Blocked {len(new_domains)} domains: {', '.join(new_domains)}")
+                        logger.info(f"Evolver auto-blocked domains: {new_domains}")
+                    except Exception as e:
+                        logger.warning(f"Failed to write dynamic blocklist: {e}")
+
+        return actions
 
     def _health_grade(self, stats: dict) -> str:
         """Grade overall fetch health A-F."""

@@ -45,6 +45,7 @@ from bs4 import BeautifulSoup
 
 from app.content_cache import ContentCache
 from app.scrubber import scrub_content
+from app.domain_trust import evaluate_trust, format_trust_tag, TrustResult
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -92,7 +93,34 @@ BLOCKED_FETCH_DOMAINS = {
     "bit.ly", "tinyurl.com", "t.co", "goo.gl", "ow.ly",
     "buff.ly", "is.gd", "v.gd", "short.io",
     "media.defense.gov",  # 0% success rate — DoD site blocks all scraping
+    "www.iiss.org",  # 0% success rate — aggressive Cloudflare + paywall (auto-blocked 2026-04-02)
+    "saisreview.sais.jhu.edu",  # 0% success rate — academic paywall (auto-blocked 2026-04-02)
+    "barrywehmiller.wd1.myworkdayjobs.com",  # 0% success rate — Workday JS app (auto-blocked 2026-04-02)
 }
+
+# Dynamic blocklist — loaded from file, written by evolver auto-apply
+DYNAMIC_BLOCKLIST_PATH = Path(os.getenv("DATA_DIR", "/app/data")) / "blocked_domains.txt"
+
+
+def _load_dynamic_blocklist() -> set[str]:
+    """Load additional blocked domains from evolver-managed file."""
+    try:
+        if DYNAMIC_BLOCKLIST_PATH.exists():
+            domains = set()
+            for line in DYNAMIC_BLOCKLIST_PATH.read_text().splitlines():
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    domains.add(line.lower())
+            return domains
+    except Exception:
+        pass
+    return set()
+
+
+# Merge static + dynamic blocklist
+def get_blocked_domains() -> set[str]:
+    """Return the full set of blocked domains (static + dynamic)."""
+    return BLOCKED_FETCH_DOMAINS | _load_dynamic_blocklist()
 
 SUSPICIOUS_TLDS = {
     ".tk", ".ml", ".ga", ".cf", ".gq",
@@ -135,6 +163,10 @@ def is_safe_url(url: str, verbose: bool = False) -> bool:
             logger.warning(f"BLOCKED: non-HTTP scheme '{parsed.scheme}'")
         return False
 
+    # Warn on plain HTTP (content could be tampered via MITM)
+    if parsed.scheme == "http" and verbose:
+        logger.warning(f"DEGRADED: plain HTTP URL (no TLS) — {hostname}")
+
     hostname = parsed.hostname
     if not hostname:
         if verbose:
@@ -148,7 +180,8 @@ def is_safe_url(url: str, verbose: bool = False) -> bool:
             logger.warning("BLOCKED: localhost/loopback")
         return False
 
-    for blocked in BLOCKED_FETCH_DOMAINS:
+    all_blocked = get_blocked_domains()
+    for blocked in all_blocked:
         if hostname_lower == blocked or hostname_lower.endswith("." + blocked):
             if verbose:
                 logger.warning(f"BLOCKED: blocked domain '{blocked}'")
@@ -258,6 +291,45 @@ def _is_youtube(url: str) -> bool:
 
 def _is_pdf_url(url: str) -> bool:
     return url.lower().rstrip("/").endswith(".pdf")
+
+
+def _is_medium(url: str) -> bool:
+    """Check if URL is a Medium article."""
+    domain = urlparse(url).netloc.lower().replace("www.", "")
+    medium_domains = {
+        "medium.com", "towardsdatascience.com", "betterprogramming.pub",
+        "levelup.gitconnected.com", "javascript.plainenglish.io",
+        "python.plainenglish.io", "blog.devgenius.io", "infosecwriteups.com",
+    }
+    return domain in medium_domains or "medium.com" in domain
+
+
+def _load_medium_adapter():
+    """Load the Medium adapter if available."""
+    path = ADAPTERS_DIR / "medium.py"
+    if not path.exists():
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location("adapter_medium", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return getattr(mod, "fetch_content", None)
+    except Exception as e:
+        logger.warning(f"Failed to load medium adapter: {e}")
+        return None
+
+
+async def _strategy_medium(url: str) -> Optional[str]:
+    """Run the Medium adapter in a thread pool."""
+    adapter = _load_medium_adapter()
+    if not adapter:
+        return None
+    loop = asyncio.get_event_loop()
+    try:
+        return await loop.run_in_executor(None, adapter, url)
+    except Exception as e:
+        logger.debug(f"Medium adapter failed: {e}")
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -422,7 +494,11 @@ async def strategy_wayback(client: httpx.AsyncClient, url: str) -> Optional[str]
 
 
 async def strategy_google_cache(client: httpx.AsyncClient, url: str) -> Optional[str]:
-    """Strategy 5: Google Cache."""
+    """Strategy 5: Google Cache.
+
+    Google cache pages wrap original content in a div. We need to strip
+    Google's header/banner and extract the actual cached page content.
+    """
     try:
         cache_url = f"https://webcache.googleusercontent.com/search?q=cache:{url}"
         r = await client.get(
@@ -432,9 +508,31 @@ async def strategy_google_cache(client: httpx.AsyncClient, url: str) -> Optional
             follow_redirects=True,
         )
         if r.is_success:
-            text = clean_html(r.text)
-            if text:
-                return text
+            html = r.text
+            soup = BeautifulSoup(html, "html.parser")
+
+            # Google Cache wraps content — remove Google's own header div
+            for div in soup.find_all("div", style=lambda s: s and "background-color" in (s or "")):
+                # Google's cache banner has inline background-color styles
+                if "cache" in div.get_text().lower() or "google" in div.get_text().lower():
+                    div.decompose()
+
+            # Also remove Google's top bar and any script/style
+            for tag in soup(GARBAGE_TAGS):
+                tag.decompose()
+
+            # Try targeted content selectors on the cached page
+            for selector in CONTENT_SELECTORS:
+                el = soup.select_one(selector)
+                if el:
+                    text = el.get_text(separator="\n", strip=True)
+                    if len(text) >= MIN_USEFUL_CHARS:
+                        return text[:MAX_CONTENT_CHARS]
+
+            # Fallback: full body text
+            text = soup.get_text(separator="\n", strip=True)
+            if text and len(text) >= MIN_USEFUL_CHARS:
+                return text[:MAX_CONTENT_CHARS]
         return None
     except Exception:
         return None
@@ -489,30 +587,68 @@ async def strategy_adapter(url: str, obstacle_type: str) -> Optional[str]:
     return await loop.run_in_executor(None, strategy_adapter_sync, url, obstacle_type)
 
 
-def strategy_pdf_sync(url: str) -> Optional[str]:
-    """Strategy 8: PDF extraction (sync — run in executor)."""
-    try:
-        import pdfplumber
-    except ImportError:
-        return None
+MAX_PDF_BYTES = 20 * 1024 * 1024  # 20 MB max PDF download
+PDF_PARSE_TIMEOUT = 30  # seconds
 
+
+def strategy_pdf_sync(url: str) -> Optional[str]:
+    """Strategy 8: PDF extraction with size limits and subprocess isolation."""
     try:
         import requests as req
-        r = req.get(url, timeout=30, headers={"User-Agent": USER_AGENTS[0]})
+
+        # Stream download with size check
+        r = req.get(url, timeout=30, headers={"User-Agent": USER_AGENTS[0]}, stream=True)
         r.raise_for_status()
+
+        # Check Content-Length header first
+        content_length = r.headers.get("Content-Length")
+        if content_length and int(content_length) > MAX_PDF_BYTES:
+            logger.warning(f"PDF too large ({int(content_length)} bytes): {url}")
+            return None
+
+        # Download with running size check
+        chunks = []
+        total = 0
+        for chunk in r.iter_content(chunk_size=65536):
+            total += len(chunk)
+            if total > MAX_PDF_BYTES:
+                logger.warning(f"PDF exceeded {MAX_PDF_BYTES} bytes during download: {url}")
+                return None
+            chunks.append(chunk)
+
+        pdf_bytes = b"".join(chunks)
+        del chunks
+
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            tmp.write(r.content)
-            tmp_path = Path(tmp.name)
-        parts = []
-        with pdfplumber.open(tmp_path) as pdf:
-            for page in pdf.pages[:50]:  # Cap at 50 pages
-                t = page.extract_text()
-                if t:
-                    parts.append(t)
-        tmp_path.unlink(missing_ok=True)
-        text = "\n".join(parts)
-        return text[:MAX_CONTENT_CHARS] if len(text) >= MIN_USEFUL_CHARS else None
-    except Exception:
+            tmp.write(pdf_bytes)
+            tmp_path = tmp.name
+
+        # Run pdfplumber in a subprocess with resource limits
+        extract_script = (
+            "import sys, json, pdfplumber, resource; "
+            "resource.setrlimit(resource.RLIMIT_AS, (512*1024*1024, 512*1024*1024)); "  # 512MB RAM cap
+            "pdf = pdfplumber.open(sys.argv[1]); "
+            "parts = []; "
+            "[parts.append(p.extract_text()) for p in pdf.pages[:50] if p.extract_text()]; "
+            "print(json.dumps('\\n'.join(parts)))"
+        )
+        try:
+            result = subprocess.run(
+                ["python3", "-c", extract_script, tmp_path],
+                capture_output=True, text=True,
+                timeout=PDF_PARSE_TIMEOUT,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                import json
+                text = json.loads(result.stdout.strip())
+                return text[:MAX_CONTENT_CHARS] if len(text) >= MIN_USEFUL_CHARS else None
+            else:
+                logger.debug(f"PDF subprocess failed: {result.stderr[:200]}")
+                return None
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+    except Exception as e:
+        logger.debug(f"PDF extraction failed: {e}")
         return None
 
 
@@ -523,15 +659,21 @@ async def strategy_pdf(url: str) -> Optional[str]:
 
 
 def strategy_youtube_sync(url: str) -> Optional[str]:
-    """Strategy 9: YouTube transcript via yt-dlp (sync)."""
+    """Strategy 9: YouTube transcript via yt-dlp with resource limits (sync)."""
     try:
         with tempfile.TemporaryDirectory() as tmp:
             out = os.path.join(tmp, "subs")
             cmd = [
                 "yt-dlp", "--write-auto-sub", "--sub-lang", "en",
-                "--sub-format", "vtt", "--skip-download", "-o", out, url,
+                "--sub-format", "vtt", "--skip-download",
+                "--no-playlist",  # Never expand playlists
+                "--max-downloads", "1",  # Single video only
+                "-o", out, url,
             ]
-            subprocess.run(cmd, capture_output=True, text=True, timeout=YT_DLP_TIMEOUT)
+            subprocess.run(
+                cmd, capture_output=True, text=True, timeout=YT_DLP_TIMEOUT,
+                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+            )
             vtt = Path(tmp) / "subs.en.vtt"
             if vtt.exists():
                 raw = vtt.read_text()
@@ -574,6 +716,7 @@ class KillChainResult:
         cached: bool,
         strategies_tried: list[str],
         error: Optional[str] = None,
+        trust: Optional[TrustResult] = None,
     ):
         self.url = url
         self.content = content
@@ -582,6 +725,7 @@ class KillChainResult:
         self.cached = cached
         self.strategies_tried = strategies_tried
         self.error = error
+        self.trust = trust
 
     @property
     def success(self) -> bool:
@@ -610,6 +754,26 @@ async def kill_chain(
             cached=False, strategies_tried=[], error="URL blocked by safety check",
         )
 
+    # Domain trust evaluation (skip WHOIS for speed — batch callers can re-check)
+    trust = evaluate_trust(url, check_whois=False)
+
+    # Block suspicious domains outright
+    if trust.lookalike_of:
+        logger.warning(f"Blocked typosquat: {trust.domain} (lookalike of {trust.lookalike_of})")
+        return KillChainResult(
+            url=url, content=None, strategy=None, chars=0,
+            cached=False, strategies_tried=[],
+            error=f"Blocked: possible typosquat of '{trust.lookalike_of}'",
+            trust=trust,
+        )
+
+    # Tag content with provenance
+    def _tag_content(content: str) -> str:
+        """Prepend trust tag to content so consuming agents see provenance."""
+        if trust.tier in ("suspicious", "new"):
+            return format_trust_tag(trust) + "\n\n" + content
+        return content
+
     # Check cache
     if content_cache and not skip_cache:
         cached_content = await content_cache.get(url)
@@ -618,7 +782,23 @@ async def kill_chain(
                 url=url, content=cached_content[:effective_max],
                 strategy="cache", chars=len(cached_content),
                 cached=True, strategies_tried=["cache"],
+                trust=trust,
             )
+
+    # Medium gets its own path — dedicated adapter with paywall bypass
+    if _is_medium(url):
+        strategies_tried.append("medium-adapter")
+        content = await _strategy_medium(url)
+        if content:
+            content = sanitize_content(content)[:effective_max]
+            if content_cache:
+                await content_cache.set(url, content, "medium-adapter")
+            return KillChainResult(
+                url=url, content=content, strategy="medium-adapter",
+                chars=len(content), cached=False, strategies_tried=strategies_tried,
+                trust=trust,
+            )
+        # Fall through to normal chain if medium adapter fails
 
     # YouTube gets its own path
     if _is_youtube(url):
@@ -631,11 +811,13 @@ async def kill_chain(
             return KillChainResult(
                 url=url, content=content, strategy="youtube",
                 chars=len(content), cached=False, strategies_tried=strategies_tried,
+                trust=trust,
             )
         return KillChainResult(
             url=url, content=None, strategy=None, chars=0,
             cached=False, strategies_tried=strategies_tried,
             error="YouTube transcript extraction failed",
+            trust=trust,
         )
 
     # PDF gets its own path
@@ -649,11 +831,13 @@ async def kill_chain(
             return KillChainResult(
                 url=url, content=content, strategy="pdf",
                 chars=len(content), cached=False, strategies_tried=strategies_tried,
+                trust=trust,
             )
         return KillChainResult(
             url=url, content=None, strategy=None, chars=0,
             cached=False, strategies_tried=strategies_tried,
             error="PDF extraction failed",
+            trust=trust,
         )
 
     # Check if URL is a known Cloudflare-protected domain — try CF adapter early
@@ -721,7 +905,8 @@ async def kill_chain(
                     logger.debug(f"[{name}] Only {len(content.strip())} chars — below minimum, skipping")
                     continue
 
-                logger.info(f"[{name}] {len(content):,} chars from {urlparse(url).netloc}")
+                content = _tag_content(content)
+                logger.info(f"[{name}] {len(content):,} chars from {urlparse(url).netloc} [trust={trust.tier}]")
 
                 if content_cache:
                     await content_cache.set(url, content, name)
@@ -730,6 +915,7 @@ async def kill_chain(
                     url=url, content=content, strategy=name,
                     chars=len(content), cached=False,
                     strategies_tried=strategies_tried,
+                    trust=trust,
                 )
         except Exception as e:
             logger.debug(f"Strategy {name} failed for {url}: {e}")
@@ -741,6 +927,7 @@ async def kill_chain(
         url=url, content=None, strategy=None, chars=0,
         cached=False, strategies_tried=strategies_tried,
         error="All extraction strategies failed",
+        trust=trust,
     )
 
 

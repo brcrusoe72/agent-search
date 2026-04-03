@@ -38,6 +38,7 @@ from app.dedup import deduplicate, deduplicate_with_scoring
 from app.killchain import kill_chain, kill_chain_batch
 from app.query_expansion import generate_query_variations
 from app.evolver import Evolver
+from app.source_tracer import trace_sources, find_institutions, get_institution_registry
 from app.database import query_db
 from app.models import (
     AdaptReportRequest,
@@ -56,6 +57,7 @@ from app.models import (
     SearchResponse,
     SearchResult,
     SearchStats,
+    TrustInfo,
 )
 
 import logging
@@ -435,6 +437,70 @@ async def search_policy(
     )
 
 
+# =========================================================================
+# SOURCE TRACER ENDPOINTS
+# =========================================================================
+
+@app.get("/search/sources")
+async def search_sources(
+    q: str = Query(..., description="Topic to trace primary sources for"),
+    count: int = Query(15, ge=1, le=30, description="Max results"),
+    fetch: bool = Query(False, description="Also extract content via kill chain"),
+) -> dict:
+    """Trace primary sources for a topic.
+
+    Instead of fighting paywalls, go upstream. Find the think tanks,
+    government agencies, and research institutions that produce the
+    data that journalists wrap narratives around.
+
+    Returns ranked sources from ~50 curated institutions.
+    """
+    start = time.time()
+
+    result = await trace_sources(
+        query=q,
+        searxng_url=SEARXNG_URL,
+        max_results=count,
+    )
+
+    # Optionally fetch content from sources
+    if fetch and result["sources"]:
+        assert http_client is not None
+        kc_results = await kill_chain_batch(
+            http_client,
+            [s["url"] for s in result["sources"]],
+            searxng_url=SEARXNG_URL,
+            content_cache=content_cache,
+            max_concurrent=5,
+        )
+        for source, kc in zip(result["sources"], kc_results):
+            source["content"] = kc.content
+            source["content_chars"] = kc.chars
+            source["content_strategy"] = kc.strategy
+            if content_cache:
+                await content_cache.log_fetch(
+                    kc.url, kc.strategy, kc.success, kc.chars,
+                    kc.strategies_tried, kc.error,
+                )
+
+    result["response_time_ms"] = round((time.time() - start) * 1000, 1)
+    return result
+
+
+@app.get("/search/sources/institutions")
+async def list_institutions(
+    topic: str | None = Query(None, description="Filter by topic tag"),
+) -> dict:
+    """List all institutions in the source registry."""
+    registry = get_institution_registry()
+    if topic:
+        registry = [i for i in registry if topic.lower() in i["topics"]]
+    return {
+        "total": len(registry),
+        "institutions": registry,
+    }
+
+
 @app.get("/search/stats", response_model=SearchStats)
 async def search_stats() -> SearchStats:
     """Get search query statistics and engine performance."""
@@ -481,6 +547,14 @@ async def read_url(
             result.chars, result.strategies_tried, result.error,
         )
 
+    trust_info = None
+    if result.trust:
+        trust_info = TrustInfo(
+            domain=result.trust.domain, tier=result.trust.tier,
+            score=result.trust.score, reasons=result.trust.reasons,
+            https=result.trust.https, lookalike_of=result.trust.lookalike_of,
+        )
+
     return ReadResponse(
         url=result.url,
         content=result.content,
@@ -490,6 +564,7 @@ async def read_url(
         strategies_tried=result.strategies_tried,
         error=result.error,
         success=result.success,
+        trust=trust_info,
     )
 
 
@@ -525,6 +600,11 @@ async def read_batch(body: BatchReadRequest) -> BatchReadResponse:
             strategies_tried=r.strategies_tried,
             error=r.error,
             success=r.success,
+            trust=TrustInfo(
+                domain=r.trust.domain, tier=r.trust.tier,
+                score=r.trust.score, reasons=r.trust.reasons,
+                https=r.trust.https, lookalike_of=r.trust.lookalike_of,
+            ) if r.trust else None,
         )
         for r in results
     ]
@@ -784,6 +864,7 @@ async def engines() -> list[EngineInfo]:
                 name=e.get("name", ""),
                 shortcut=e.get("shortcut", ""),
                 enabled=e.get("enabled", False),
+                categories=e.get("categories", []),
             )
             for e in data.get("engines", [])
         ]

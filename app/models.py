@@ -47,6 +47,16 @@ class SearchStats(BaseModel):
 # Read (Kill Chain)
 # ---------------------------------------------------------------------------
 
+class TrustInfo(BaseModel):
+    """Domain trust assessment."""
+    domain: str = ""
+    tier: str = Field("unknown", description="established | standard | new | suspicious | unknown")
+    score: float = Field(0.5, description="Trust score 0.0–1.0")
+    reasons: list[str] = Field(default_factory=list)
+    https: bool = True
+    lookalike_of: str | None = None
+
+
 class ReadResponse(BaseModel):
     """Response from /read — extracted content via kill chain."""
     url: str
@@ -57,6 +67,7 @@ class ReadResponse(BaseModel):
     strategies_tried: list[str] = Field(default_factory=list, description="All strategies attempted")
     error: str | None = Field(None, description="Error message if extraction failed")
     success: bool = Field(description="Whether content was extracted")
+    trust: TrustInfo | None = Field(None, description="Domain trust assessment")
 
 
 class BatchReadRequest(BaseModel):
@@ -120,6 +131,7 @@ class EvolveResponse(BaseModel):
     stats_summary: dict
     recommendations: list[dict]
     existing_adapters: list[str]
+    actions_taken: list[str] = Field(default_factory=list, description="Auto-applied actions")
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +165,7 @@ class EngineInfo(BaseModel):
     name: str
     shortcut: str
     enabled: bool
+    categories: list[str] = Field(default_factory=list, description="Engine categories")
 
 
 class HealthResponse(BaseModel):
