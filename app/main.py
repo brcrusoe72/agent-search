@@ -127,10 +127,31 @@ _rate_store: dict[str, list[float]] = defaultdict(list)
 _RATE_MAX_IPS = 500
 RATE_LIMIT_RPM = int(os.getenv("RATE_LIMIT", "60"))
 
+# Global circuit breaker — hard cap on total requests per minute across ALL IPs
+# Prevents runaway automation from overwhelming SearXNG or external sources
+_GLOBAL_RATE_LIMIT = int(os.getenv("GLOBAL_RATE_LIMIT", "300"))  # 300 req/min global
+_global_timestamps: list[float] = []
+
+
+# Bearer token auth — set AGENT_SEARCH_TOKEN env var to enable
+_AUTH_TOKEN = os.getenv("AGENT_SEARCH_TOKEN", "")
+
+
+@app.middleware("http")
+async def auth_middleware(request, call_next):
+    """Bearer token auth. Skips /health for monitoring."""
+    if _AUTH_TOKEN and request.url.path != "/health":
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer ") or auth_header[7:] != _AUTH_TOKEN:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+    return await call_next(request)
+
 
 @app.middleware("http")
 async def rate_limit_middleware(request, call_next):
-    """Per-IP rate limiter with memory bounds and request logging."""
+    """Per-IP + global rate limiter with memory bounds and request logging."""
+    global _global_timestamps
     client_ip = request.client.host if request.client else "unknown"
     now = time.time()
 
@@ -138,6 +159,22 @@ async def rate_limit_middleware(request, call_next):
     query = str(request.query_params) if request.query_params else ""
     logger.info(f"{client_ip} {request.method} {path} {query}")
 
+    # Skip rate limiting for health check
+    if path == "/health":
+        return await call_next(request)
+
+    # Global circuit breaker — protect SearXNG and external sources
+    _global_timestamps = [t for t in _global_timestamps if now - t < 60]
+    if len(_global_timestamps) >= _GLOBAL_RATE_LIMIT:
+        logger.warning(f"GLOBAL rate limit hit ({_GLOBAL_RATE_LIMIT}/min)")
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Global rate limit exceeded — try again shortly"},
+        )
+    _global_timestamps.append(now)
+
+    # Per-IP rate limiting
     if len(_rate_store) > _RATE_MAX_IPS:
         stale = [ip for ip, ts in _rate_store.items() if not ts or now - max(ts) > 120]
         for ip in stale:

@@ -20,6 +20,7 @@ services:
       - CACHE_TTL=3600
       - RATE_LIMIT=60
       - ADAPTERS_DIR=/app/adapters
+      - AGENT_SEARCH_TOKEN=${AGENT_SEARCH_TOKEN:-}
     depends_on:
       - searxng
     volumes:

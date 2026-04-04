@@ -134,7 +134,7 @@ SUSPICIOUS_TLDS = {
 FETCH_TIMEOUT = 15.0
 MIN_USEFUL_CHARS = 200  # Content shorter than this is probably garbage
 WAYBACK_TIMEOUT = 20.0
-YT_DLP_TIMEOUT = 60
+YT_DLP_TIMEOUT = 90
 
 import logging
 logger = logging.getLogger("agentsearch.killchain")
@@ -588,7 +588,7 @@ async def strategy_adapter(url: str, obstacle_type: str) -> Optional[str]:
 
 
 MAX_PDF_BYTES = 20 * 1024 * 1024  # 20 MB max PDF download
-PDF_PARSE_TIMEOUT = 30  # seconds
+PDF_PARSE_TIMEOUT = 60  # seconds
 
 
 def strategy_pdf_sync(url: str) -> Optional[str]:
