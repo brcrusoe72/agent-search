@@ -1,6 +1,6 @@
 # 🔍 AgentSearch
 
-**Free, self-hosted search API for AI agents.** Zero API keys. One command to deploy.
+Self-hosted SearXNG-backed search API and MCP server for AI agents. Drop-in alternative to Tavily/Exa — without the per-query bill or the API key.
 
 [![PyPI](https://img.shields.io/pypi/v/agentsearch-client)](https://pypi.org/project/agentsearch-client/) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
