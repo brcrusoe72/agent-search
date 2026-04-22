@@ -243,8 +243,13 @@ def evaluate_trust(url: str, check_whois: bool = True) -> TrustResult:
         reasons.append("No HTTPS — content may be tampered")
         score = min(score, 0.3)
 
-    # 5. Lookalike detection
-    lookalike = detect_lookalike(domain)
+    # 5. Lookalike detection — skip for established domains and trusted TLDs
+    _skip_lookalike = (
+        domain in ESTABLISHED_DOMAINS
+        or any(domain.endswith("." + d) for d in ESTABLISHED_DOMAINS)
+        or any(domain.endswith(t) for t in TRUSTED_TLDS)
+    )
+    lookalike = None if _skip_lookalike else detect_lookalike(domain)
     if lookalike:
         reasons.append(f"Possible typosquat of '{lookalike}'")
         score = min(score, 0.1)
