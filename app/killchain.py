@@ -86,7 +86,6 @@ PAYWALL_SIGNALS = [
     "start your free trial", "exclusive content",
 ]
 
-MIN_USEFUL_CHARS = 300
 MAX_CONTENT_CHARS = 15_000
 
 BLOCKED_FETCH_DOMAINS = {
@@ -134,6 +133,7 @@ SUSPICIOUS_TLDS = {
 FETCH_TIMEOUT = 15.0
 MIN_USEFUL_CHARS = 200  # Content shorter than this is probably garbage
 WAYBACK_TIMEOUT = 20.0
+GOOGLE_CACHE_TIMEOUT = 5.0  # Google's public cache is effectively dead; fail fast
 YT_DLP_TIMEOUT = 90
 
 import logging
@@ -503,7 +503,7 @@ async def strategy_google_cache(client: httpx.AsyncClient, url: str) -> Optional
         cache_url = f"https://webcache.googleusercontent.com/search?q=cache:{url}"
         r = await client.get(
             cache_url,
-            timeout=FETCH_TIMEOUT,
+            timeout=GOOGLE_CACHE_TIMEOUT,
             headers={"User-Agent": USER_AGENTS[0]},
             follow_redirects=True,
         )
@@ -757,8 +757,11 @@ async def kill_chain(
     # Domain trust evaluation (skip WHOIS for speed — batch callers can re-check)
     trust = evaluate_trust(url, check_whois=False)
 
-    # Block suspicious domains outright
-    if trust.lookalike_of:
+    # Block suspicious domains outright — but never block trusted TLDs (.gov/.edu/.mil)
+    # The typosquat detector can false-positive on legitimate government domains (e.g. congress.gov → cnn)
+    _SAFE_TLDS = (".gov", ".edu", ".mil", ".int")
+    _is_trusted_tld = any(trust.domain.endswith(t) for t in _SAFE_TLDS)
+    if trust.lookalike_of and not _is_trusted_tld:
         logger.warning(f"Blocked typosquat: {trust.domain} (lookalike of {trust.lookalike_of})")
         return KillChainResult(
             url=url, content=None, strategy=None, chars=0,
