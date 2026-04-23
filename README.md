@@ -2,7 +2,7 @@
 
 # 🔍 AgentSearch
 
-**[Quick Start](#-quick-start) · [Features](#-why-agentsearch) · [API](#-api-reference) · [MCP Server](#mcp-claude-desktop-cursor-windsurf) · [Architecture](#%EF%B8%8F-architecture) · [FAQ](#-faq)**
+**[Quick Start](#-quick-start) · [Features](#-why-agentsearch) · [API](#-api-reference) · [MCP Server](#mcp-claude-desktop-cursor-windsurf) · [Architecture](#️-architecture) · [FAQ](#-faq)**
 
 </div>
 
@@ -25,6 +25,10 @@ curl "http://localhost:3939/search?q=distributed+consensus+algorithms&count=5"
 ```
 
 That's it. You now have a deduplicated, multi-engine, LLM-ready search API running at `http://localhost:3939`.
+
+### Terminal Demo
+
+For a reproducible terminal GIF workflow using the real AgentSearch quick-start commands, see [`docs/TERMINAL_GIF_GUIDE.md`](docs/TERMINAL_GIF_GUIDE.md) and the tapes in `docs/demo/`.
 
 <br />
 
