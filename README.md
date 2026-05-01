@@ -28,6 +28,23 @@ docker compose up -d
 
 That's it. Search at `http://localhost:3939`.
 
+## Real-World Use
+
+A live research agent — the "wolf," part of an internal autonomous research system — uses every endpoint AgentSearch exposes:
+
+- `/search` for round-1 multi-engine discovery
+- `/search/deep` for round-2+ reformulation when round 1 produces zero high-value yield (server-side query variation)
+- `/search/extract` to fold content fetching into the discovery call
+- `/news` for company / recent-events intelligence
+- `/read` (9-strategy kill chain) for direct seed-URL grounding and full-text extraction
+- `/read/batch` for parallel multi-source acquisition
+
+Before AgentSearch was wired in correctly, the agent's hand-rolled SearXNG client silently 401'd on three of four engines. Every hunt on a low-profile entity returned **0 frameworks, 0/7 gap closure, $0.18 wasted**.
+
+After authentication: **17 frameworks per hunt, 7/7 gaps closed, $0.21 productive, Observer grade B / Signal A / Reliability A.** Same agent, same model, same prompts. The difference was the search infrastructure underneath.
+
+→ Full walkthrough with architecture diagram, before/after numbers, and a 200-LoC drop-in client: [`case-studies/wolf.md`](case-studies/wolf.md)
+
 ## API
 
 ### `GET /search`
