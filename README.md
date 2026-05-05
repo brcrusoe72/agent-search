@@ -1,296 +1,137 @@
-<div align="center">
+# AgentSearch
 
-# 🔍 AgentSearch
+Self-hosted search API for AI agents. 16 endpoints. 9-strategy content extraction. Optional Tor-anonymized stack. No API keys, no per-query fees, no vendor lock-in.
 
-**[Quick Start](#-quick-start) · [Features](#-why-agentsearch) · [API](#-api-reference) · [MCP Server](#mcp-claude-desktop-cursor-windsurf) · [Architecture](#️-architecture) · [FAQ](#-faq)**
-
-</div>
-
-<br />
-
----
-
-## ⚡ Quick Start
-
-Three commands. One endpoint. No API keys, no quotas, no vendor lock-in.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![PyPI](https://img.shields.io/pypi/v/agentsearch-client)](https://pypi.org/project/agentsearch-client/)
 
 ```bash
 git clone https://github.com/brcrusoe72/agent-search.git
 cd agent-search
 docker compose up -d
+curl "http://localhost:3939/search?q=distributed+consensus+algorithms"
 ```
 
+Three commands. You now have a deduplicated, multi-engine search API running on `:3939`.
+
+---
+
+## What it does
+
+AgentSearch wraps [SearXNG](https://github.com/searxng/searxng) with a FastAPI layer that adds everything LLM agents actually need: deduplication, cross-engine scoring, content extraction, query expansion, domain trust scoring, prompt injection scrubbing, and self-improvement.
+
+**Standard stack** — `docker compose up` gives you search on `:3939`.
+
+**Private stack** — `docker compose -f docker-compose.yml -f examples/compose.private.yml up` adds an anonymized instance on `:3940` that routes all traffic through Tor with Snowflake obfuscation. Encrypted DNS via CoreDNS → Cloudflare DoT. Network-level isolation — the private stack physically cannot egress without Tor.
+
+## Why not just use SearXNG directly?
+
+SearXNG finds pages. AgentSearch finds pages, reads them, scores them, deduplicates them, caches them, scrubs prompt injections out of them, detects paywalls, falls back through 9 extraction strategies when the first one fails, and gets better at it over time. One API call.
+
+| | AgentSearch | Tavily | Exa | SerpAPI | Raw SearXNG |
+|---|---|---|---|---|---|
+| **Cost** | Free | $0.005/query | $0.001/query | $50/mo | Free |
+| **Self-hosted** | ✅ | ❌ | ❌ | ❌ | ✅ |
+| **Content extraction** | 9-strategy kill chain | Basic | Basic | ❌ | ❌ |
+| **Deduplication** | Cross-engine | ❌ | ❌ | ❌ | ❌ |
+| **Prompt injection scrubbing** | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Self-improving** | ✅ (evolver) | ❌ | ❌ | ❌ | ❌ |
+| **Tor anonymization** | Optional | ❌ | ❌ | ❌ | Manual |
+
+## Endpoints
+
+### Search
+
+| Endpoint | Method | What it does |
+|---|---|---|
+| `/search` | GET | Multi-engine web search with deduplication and scoring |
+| `/search/deep` | GET | Server-side query expansion — runs variations in parallel, fuses results |
+| `/search/extract` | GET | Search + inline content extraction in one call |
+| `/search/jobs` | GET | Job search across LinkedIn, Indeed, Glassdoor, ZipRecruiter |
+| `/search/policy` | GET | Policy and regulatory document search |
+| `/search/sources` | GET | Source discovery with institutional filtering |
+| `/search/stats` | GET | Query statistics and cache metrics |
+| `/news` | GET | Structured multi-source news (Google News, Bing News, Yahoo News) |
+
+### Content extraction
+
+| Endpoint | Method | What it does |
+|---|---|---|
+| `/read` | GET | 9-strategy kill chain extraction for any URL |
+| `/read/batch` | POST | Concurrent multi-URL extraction in one request |
+
+The kill chain escalates through strategies until one succeeds:
+
+1. Direct fetch + smart content selectors
+2. Readability scoring (paragraph density vs link density)
+3. User-agent rotation (Chrome/Safari/Firefox/Edge signatures)
+4. Wayback Machine (CDX API → latest snapshot)
+5. Google Cache
+6. Search-about fallback (find coverage elsewhere)
+7. Custom adapters (pluggable Python modules from disk)
+8. PDF extraction (pdfplumber)
+9. YouTube transcript (yt-dlp)
+
+Every request gets SSRF protection, prompt injection detection, paywall detection, and content length caps automatically.
+
+### Self-improvement
+
+| Endpoint | Method | What it does |
+|---|---|---|
+| `/adapt/report` | POST | Report a fetch failure for a URL |
+| `/adapt/stats` | GET | View adaptation metrics and failure patterns |
+| `/adapt/evolve` | POST | Trigger self-improvement cycle — analyzes failures, tunes config |
+
+### Infrastructure
+
+| Endpoint | Method | What it does |
+|---|---|---|
+| `/health` | GET | Health check (API + SearXNG status) |
+| `/engines` | GET | List available search engines and their status |
+
+## Quick examples
+
+### Search with content extraction
+
 ```bash
-curl "http://localhost:3939/search?q=distributed+consensus+algorithms&count=5"
+curl "http://localhost:3939/search/extract?q=python+async+patterns&count=3"
 ```
 
-## Real-World Use
+Returns search results with extracted content inline — no second round-trip to `/read`.
 
-A live research agent — the "wolf," part of an internal autonomous research system — uses every endpoint AgentSearch exposes:
-
-- `/search` for round-1 multi-engine discovery
-- `/search/deep` for round-2+ reformulation when round 1 produces zero high-value yield (server-side query variation)
-- `/search/extract` to fold content fetching into the discovery call
-- `/news` for company / recent-events intelligence
-- `/read` (9-strategy kill chain) for direct seed-URL grounding and full-text extraction
-- `/read/batch` for parallel multi-source acquisition
-
-Before AgentSearch was wired in correctly, the agent's hand-rolled SearXNG client silently 401'd on three of four engines. Every hunt on a low-profile entity returned **0 frameworks, 0/7 gap closure, $0.18 wasted**.
-
-After authentication: **17 frameworks per hunt, 7/7 gaps closed, $0.21 productive, Observer grade B / Signal A / Reliability A.** Same agent, same model, same prompts. The difference was the search infrastructure underneath.
-
-→ Full walkthrough with architecture diagram, before/after numbers, and a 200-LoC drop-in client: [`case-studies/wolf.md`](case-studies/wolf.md)
-
-## API
-
-### Terminal Demo
-
-For a reproducible terminal GIF workflow using the real AgentSearch quick-start commands, see [`docs/TERMINAL_GIF_GUIDE.md`](docs/TERMINAL_GIF_GUIDE.md) and the tapes in `docs/demo/`.
-
-<br />
-
-## 🎯 Why AgentSearch?
-
-You could call SearXNG directly. Most people building serious agent infrastructure end up writing this layer anyway. AgentSearch is that layer, already built.
-
-<table>
-<tr>
-<td width="50%" valign="top">
-
-### 🧠 LLM-Native Output
-Structured JSON with typed fields, scores, and metadata. No HTML scraping, no regex, no post-processing. Drop it straight into your agent's context.
-
-</td>
-<td width="50%" valign="top">
-
-### 🎯 Cross-Engine Scoring
-Results are deduplicated and ranked by how many engines agree. Position 1 is position 1 for a reason — not an artifact of one engine's bias.
-
-</td>
-</tr>
-<tr>
-<td width="50%" valign="top">
-
-### 🔗 9-Strategy Kill Chain
-The `/read` endpoint cascades through direct fetch, readability parsing, UA rotation, Wayback, Google Cache, and more. Most stubborn URLs resolve.
-
-</td>
-<td width="50%" valign="top">
-
-### 🌊 Deep Search
-`/search/deep` generates query variations, runs them in parallel, and fuses the rankings. Better recall on ambiguous or broad queries.
-
-</td>
-</tr>
-<tr>
-<td width="50%" valign="top">
-
-### 🛡️ Production-Ready
-In-memory cache, per-IP + global rate limits, bearer-token auth, health checks. Ship it behind a reverse proxy and sleep well.
-
-</td>
-<td width="50%" valign="top">
-
-### 🔌 MCP Server Included
-Plug directly into Claude Desktop, Cursor, or Windsurf. Six tools exposed over stdio — search, read, news, jobs, and more.
-
-</td>
-</tr>
-</table>
-
-<br />
-
-## 📊 How It Compares
-
-<div align="center">
-
-| | **AgentSearch** | Tavily | Exa | SerpAPI | Google CSE |
-|---|:---:|:---:|:---:|:---:|:---:|
-| **Cost** | Your infra only | $0.005/query | $0.003/query | $50/mo | $5/1K queries |
-| **API key required** | Optional | ✅ | ✅ | ✅ | ✅ |
-| **Setup** | `docker compose up` | Sign up | Sign up | Sign up | Console + billing |
-| **Engines** | 70+ via SearXNG | Tavily only | Exa only | Google only | Google only |
-| **Self-hosted** | ✅ | ❌ | ❌ | ❌ | ❌ |
-| **Content extraction** | 9-strategy kill chain | Basic | Built-in | ❌ | ❌ |
-| **Query expansion** | ✅ | Partial | ❌ | ❌ | ❌ |
-| **MCP server** | ✅ Included | Third-party | Third-party | ❌ | ❌ |
-| **Cross-engine scoring** | ✅ | N/A | N/A | ❌ | ❌ |
-| **Data ownership** | 100% yours | Vendor | Vendor | Vendor | Vendor |
-
-</div>
-
-> **Translation:** if you're running more than ~10K queries/month against Tavily or Exa, AgentSearch pays for itself the first month. If you're processing sensitive queries, it's the only option that doesn't leak them to a third party.
-
-<br />
-
-## 🧩 Core Features
-
-### Deduplication & Cross-Engine Scoring
-
-Every query hits multiple engines. Results are fingerprinted, deduplicated, and scored by cross-engine agreement. A result that surfaces on Google *and* Bing *and* DuckDuckGo ranks higher than one that only appears on one.
+### Deep search (query expansion)
 
 ```bash
-curl "http://localhost:3939/search?q=python+async+patterns&count=5"
+curl "http://localhost:3939/search/deep?q=ethon+industrial+ai+platform&count=10"
+```
+
+Server-side query variation + parallel execution + result fusion. Surfaces results that flat `/search` misses.
+
+### Read a URL (kill chain)
+
+```bash
+curl "http://localhost:3939/read?url=https://example.com/paywalled-article"
 ```
 
 ```json
 {
-  "results": [
-    {
-      "title": "Async IO in Python: A Complete Walkthrough",
-      "url": "https://realpython.com/async-io-python/",
-      "snippet": "A comprehensive guide to async/await in Python 3...",
-      "engines": ["google", "bing", "duckduckgo"],
-      "score": 1.0,
-      "position": 1
-    }
-  ],
-  "meta": {
-    "query": "python async patterns",
-    "total": 5,
-    "engines_used": ["google", "bing", "duckduckgo"],
-    "cached": false,
-    "response_time_ms": 842.3
-  }
+  "url": "https://example.com/paywalled-article",
+  "content": "Full article text extracted via Wayback Machine...",
+  "strategy": "wayback",
+  "chars": 4821,
+  "cached": false,
+  "strategies_tried": ["direct", "readability", "ua_rotation", "wayback"]
 }
 ```
 
----
+### Batch read
 
-### The 9-Strategy Kill Chain
-
-Content extraction is the silent killer of most RAG pipelines. `/read` doesn't give up on the first failure — it cascades through nine strategies, each tuned for a different class of stubborn URL.
-
-```mermaid
-flowchart TD
-    Start([URL Request]) --> S1{1. Direct Fetch}
-    S1 -->|✓| Done([Return Content])
-    S1 -->|✗| S2{2. Readability Parse}
-    S2 -->|✓| Done
-    S2 -->|✗| S3{3. UA Rotation}
-    S3 -->|✓| Done
-    S3 -->|✗| S4{4. JS-Rendered Fallback}
-    S4 -->|✓| Done
-    S4 -->|✗| S5{5. Wayback Machine}
-    S5 -->|✓| Done
-    S5 -->|✗| S6{6. Google Cache}
-    S6 -->|✓| Done
-    S6 -->|✗| S7[7–9. Additional Fallbacks]
-    S7 -->|✓| Done
-    S7 -->|✗| Report[Report to /adapt/report]
-    Report --> Loop[Self-improvement loop<br/>re-orders the chain]
-
-    style Done fill:#10b981,stroke:#065f46,color:#fff
-    style Report fill:#f59e0b,stroke:#92400e,color:#fff
-    style Loop fill:#8b5cf6,stroke:#5b21b6,color:#fff
-```
-
-Most URLs resolve on strategies 1–3. The chain exists for the rest.
-
----
-
-### Deep Search with Query Expansion
-
-Ambiguous or underspecified queries are the norm in agent workflows. Deep search generates 3–5 variations, runs them all, deduplicates across result sets, and returns a fused ranking.
-
-```bash
-curl "http://localhost:3939/search/deep?q=best+practices+for+llm+caching&count=10"
-```
-
-> Expands to: *"LLM response caching strategies"*, *"semantic cache for language models"*, *"prompt caching best practices"*, and similar — then merges the top results.
-
----
-
-### MCP: Claude Desktop, Cursor, Windsurf
-
-Six tools exposed over stdio: `search`, `deep_search`, `read_url`, `read_batch`, `news`, `search_jobs`. Plug it into any MCP-compatible client and your agent can reach the open web without custom tool code.
-
-```json
-{
-  "mcpServers": {
-    "agent-search": {
-      "command": "python",
-      "args": ["/path/to/agent-search/mcp-server/server.py"]
-    }
-  }
-}
-```
-
----
-
-### Production Essentials, Built In
-
-| | |
-|---|---|
-| 🚦 **Rate limiting** | Per-IP and global, configurable via env vars |
-| 🔒 **Bearer token auth** | Optional, applies to everything except `/health` |
-| 💾 **In-memory caching** | Default 1-hour TTL, configurable |
-| 🏥 **Health checks** | Container status + upstream SearXNG connectivity |
-| 🔁 **Self-improvement loop** | Tracks extraction failures, re-orders kill chain deterministically |
-
-<br />
-
-## 📡 API Reference
-
-<div align="center">
-
-| Endpoint | Method | What It Does |
-|----------|:------:|--------------|
-| `/search` | `GET` | Web search with deduplication and multi-engine scoring |
-| `/search/deep` | `GET` | Multi-query fusion — generates variations, merges results |
-| `/search/extract` | `GET` | Search + extract page content from top results in one call |
-| `/search/jobs` | `GET` | Job board search (via SearXNG job engines) |
-| `/search/stats` | `GET` | Query statistics and usage metrics |
-| `/read` | `GET` | Extract readable content from a single URL (9-strategy kill chain) |
-| `/read/batch` | `POST` | Batch extract up to 20 URLs concurrently |
-| `/news` | `GET` | Structured news from Google News, Bing News, and friends |
-| `/adapt/report` | `POST` | Report extraction failures (feeds the self-improvement loop) |
-| `/adapt/stats` | `GET` | View adaptation metrics |
-| `/adapt/evolve` | `POST` | Trigger self-improvement analysis |
-| `/health` | `GET` | Health check |
-| `/engines` | `GET` | List available search engines and their status |
-
-</div>
-
-<details>
-<summary><b>More example calls</b></summary>
-
-<br />
-
-**Search + extract in one round-trip**
-```bash
-curl "http://localhost:3939/search?q=rust+error+handling&count=3&fetch=true"
-```
-
-**Read a single URL**
-```bash
-curl "http://localhost:3939/read?url=https://example.com/some-article"
-```
-
-**Structured news**
-```bash
-curl "http://localhost:3939/news?q=ai+regulation&count=5"
-```
-
-**Job search**
-```bash
-curl "http://localhost:3939/search/jobs?q=senior+python+engineer&location=remote"
-```
-
-**Batch extraction**
 ```bash
 curl -X POST "http://localhost:3939/read/batch" \
   -H "Content-Type: application/json" \
-  -d '{"urls": ["https://example.com/a", "https://example.com/b"]}'
+  -d '{"urls": ["https://a.com", "https://b.com", "https://c.com"]}'
 ```
 
-</details>
-
-<br />
-
-## 🐍 Clients & Integrations
-
-### Python Client
+### Python SDK
 
 ```bash
 pip install agentsearch-client
@@ -300,13 +141,20 @@ pip install agentsearch-client
 from agentsearch import AgentSearch
 
 client = AgentSearch()  # defaults to localhost:3939
-results = client.search("distributed systems consensus algorithms")
-
-for r in results:
+results = client.search("manufacturing OEE best practices", count=5)
+for r in results.results:
     print(f"{r.title} — {r.url}")
+
+# Content extraction
+page = client.read("https://example.com/article")
+print(page.content[:500])
+
+# Batch read
+pages = client.read_batch(["https://a.com", "https://b.com"])
+print(f"{pages.successful}/{pages.total} succeeded")
 ```
 
-### LangChain
+### LangChain tool
 
 ```python
 from langchain.tools import tool
@@ -315,223 +163,139 @@ import requests
 @tool
 def web_search(query: str) -> str:
     """Search the web using AgentSearch."""
-    resp = requests.get(
-        "http://localhost:3939/search",
-        params={"q": query, "count": 5}
-    )
-    results = resp.json()["results"]
+    resp = requests.get("http://localhost:3939/search", params={"q": query, "count": 5})
     return "\n".join(
         f"- {r['title']}: {r['url']}\n  {r['snippet']}"
-        for r in results
+        for r in resp.json()["results"]
     )
 ```
 
-### MCP Server
+### MCP server (Claude Desktop, Cursor, Windsurf)
 
 ```bash
 pip install mcp httpx
 python mcp-server/server.py
 ```
 
-See [`mcp-server/README.md`](mcp-server/README.md) for remote setup, custom ports, and troubleshooting.
+Add to Claude Desktop config:
 
-<br />
-
-## 🏗️ Architecture
-
-```mermaid
-flowchart LR
-    subgraph Clients["🧑‍💻 Clients"]
-        Agent["Your Agent<br/>any LLM"]
-        MCP["MCP Clients<br/>Claude · Cursor · Windsurf"]
-    end
-
-    subgraph Core["⚙️ AgentSearch — :3939"]
-        API["FastAPI<br/>Dedup · Scoring · Cache<br/>Rate limits · Auth · Kill chain"]
-        MCPServer["MCP Server<br/>(stdio)"]
-    end
-
-    subgraph Upstream["🔎 Search Layer"]
-        SXNG["SearXNG<br/>:8080"]
-        Engines["Google · Bing · DuckDuckGo<br/>Brave · Startpage · Wikipedia<br/>70+ engines"]
-    end
-
-    Agent <-->|HTTP/JSON| API
-    MCP <-->|stdio| MCPServer
-    MCPServer <--> API
-    API <-->|HTTP| SXNG
-    SXNG <--> Engines
-
-    style API fill:#3b82f6,stroke:#1e40af,color:#fff
-    style SXNG fill:#8b5cf6,stroke:#5b21b6,color:#fff
-    style MCPServer fill:#10b981,stroke:#065f46,color:#fff
+```json
+{
+  "mcpServers": {
+    "agent-search": {
+      "command": "python",
+      "args": ["/path/to/mcp-server/server.py"]
+    }
+  }
+}
 ```
 
-The heavy lifting — deduplication, cross-engine scoring, kill-chain extraction, query expansion, caching, auth, self-improvement — happens in the middle layer. SearXNG handles engine rotation and upstream rate limiting. Your agent just gets clean JSON.
+See [`mcp-server/README.md`](mcp-server/README.md) for details.
 
-<br />
+## Private stack (Tor + encrypted DNS)
 
-## 🔧 Configuration
+The optional private stack adds a fully anonymized search path:
 
-### Environment Variables
+```
+┌──────────┐    ┌──────────────┐    ┌───────────────┐    ┌──────────┐
+│  :3940   │───▶│ api-private  │───▶│ searxng-priv  │───▶│   Tor    │──▶ Internet
+│ (agent)  │    │ (FastAPI)    │    │ (SearXNG)     │    │(Snowflake│
+└──────────┘    └──────────────┘    └───────────────┘    │ + obfs4) │
+                                                          └──────────┘
+                 All containers use CoreDNS → Cloudflare DoT
+                 tor-internal network: no direct egress possible
+```
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SEARXNG_URL` | `http://searxng:8080` | SearXNG instance URL |
-| `CACHE_TTL` | `3600` | Cache duration (seconds) |
-| `RATE_LIMIT` | `60` | Max requests per minute per IP |
-| `GLOBAL_RATE_LIMIT` | `300` | Max requests per minute across all IPs |
-| `AGENT_SEARCH_TOKEN` | _(empty)_ | Set to require `Bearer <token>` auth |
+**What this gives you:**
+- Your ISP sees TLS to Cloudflare (DNS) and WebRTC-looking traffic (Snowflake). Not search queries.
+- The private SearXNG instance lives on an internal-only Docker network with no internet route except through Tor.
+- Port 3939 = direct (fast), port 3940 = anonymized (slower, private).
 
-### Search Engines
-
-Edit `searxng/settings.yml` to enable/disable engines, then restart:
+**Setup:**
 
 ```bash
-docker compose restart searxng
+docker compose -f docker-compose.yml -f examples/compose.private.yml up -d --build
 ```
 
-### Running Without Docker
+All private stack configs live in [`examples/`](examples/) — copy and customize as needed.
+
+## Architecture
+
+```
+Port 3939 (direct)                    Port 3940 (Tor-anonymized)
+     │                                      │
+     ▼                                      ▼
+┌─────────┐                          ┌─────────────┐
+│   API   │                          │ api-private  │
+│(FastAPI) │                          │  (FastAPI)   │
+├─────────┤                          ├─────────────┤
+│ dedup   │  ┌─────────────────┐     │ same code   │  ┌───────────────┐
+│ scoring │  │    SearXNG      │     │ Tor egress  │  │ SearXNG-priv  │
+│ cache   │──│ Google, Bing,   │     │ only        │──│ (tor-internal │
+│ scrub   │  │ DDG, Brave,     │     └─────────────┘  │  network)     │
+│ killchn │  │ Startpage, +20  │                       └───────┬───────┘
+│ trust   │  └─────────────────┘                               │
+│ evolver │                                              ┌─────┴─────┐
+└─────────┘                                              │    Tor    │
+     │                                                   │ Snowflake │
+     ▼                                                   │  + obfs4  │
+┌─────────┐                                              └───────────┘
+│ CoreDNS │──▶ Cloudflare DoT (encrypted DNS)
+└─────────┘
+```
+
+### Key modules (6,700 LOC)
+
+| Module | LOC | What it does |
+|---|---|---|
+| `killchain.py` | 954 | 9-strategy escalating content extraction |
+| `main.py` | 909 | FastAPI app, 16 endpoints, auth, rate limiting |
+| `source_tracer.py` | 620 | Source provenance tracking and citation chains |
+| `scrubber.py` | 539 | Prompt injection detection and content sanitization |
+| `source_library.py` | 310 | Curated institutional source registry |
+| `domain_trust.py` | 311 | Domain trust scoring (TLD, age, reputation) |
+| `evolver.py` | 301 | Self-improvement engine — failure analysis → config tuning |
+| `content_cache.py` | 241 | URL-keyed content cache with TTL |
+| `query_expansion.py` | 201 | Server-side query variation and fusion |
+
+Plus: 5 pluggable adapters (Cloudflare bypass, Medium, 403 handler, parse error recovery, empty content fallback), MCP server, Python SDK, test suite.
+
+## Case study: 0 → 17 frameworks per hunt
+
+A real autonomous research agent ("the wolf") uses every AgentSearch endpoint. Before AgentSearch was wired in correctly, the agent's hand-rolled SearXNG client silently 401'd on three of four engines. Every hunt on a low-profile entity returned **0 frameworks**.
+
+After: **17 frameworks per hunt, 7/7 gaps closed.** Same agent, same model, same prompts. The difference was the search infrastructure underneath.
+
+→ Full walkthrough: [`case-studies/wolf.md`](case-studies/wolf.md)
+
+## Configuration
+
+Environment variables (set in `docker-compose.yml` or `.env`):
+
+| Variable | Default | Description |
+|---|---|---|
+| `SEARXNG_URL` | `http://searxng:8080` | SearXNG instance URL |
+| `CACHE_TTL` | `3600` | Cache duration in seconds |
+| `RATE_LIMIT` | `60` | Max requests per minute |
+| `AGENT_SEARCH_TOKEN` | *(empty)* | Bearer token for auth (optional) |
+| `ADAPTERS_DIR` | `/app/adapters` | Path to pluggable adapter modules |
+
+## Development
 
 ```bash
 pip install -r requirements.txt
 SEARXNG_URL=http://localhost:8080 uvicorn app.main:app --reload --port 3939
+
+# Run tests
+pytest tests/
 ```
 
-Requires a SearXNG instance running separately.
+## Contributing
 
-<br />
+1. Fork → branch → commit → PR.
 
-## 🚀 Running in Production
+Issues and PRs welcome. If you're building an agent that needs search, this is for you.
 
-Things that are easy to forget until they bite:
+## License
 
-1. **Set `AGENT_SEARCH_TOKEN`.** The default `docker-compose` binds to `127.0.0.1:3939`, but the moment you put a reverse proxy in front, you need auth.
-2. **Tune rate limits for your traffic shape.** `RATE_LIMIT=60` per IP is conservative. Bump `GLOBAL_RATE_LIMIT` first — it protects upstream engines.
-3. **Enable more engines.** More engines = better cross-engine scoring *and* better rate-limit headroom. SearXNG rotates automatically.
-4. **Watch `/adapt/stats`.** If a site consistently fails the kill chain, the self-improvement loop will re-rank strategies. Let it cook.
-5. **Cache aggressively.** Default TTL is 1 hour. For research-style workloads, 6–24 hours is reasonable. For news, drop it to 5 minutes.
-
-<br />
-
-## ❓ FAQ
-
-<details>
-<summary><b>How is this different from Perplexica?</b></summary>
-
-<br />
-
-Perplexica is an AI-powered search *interface* — it interprets your question and generates an answer. AgentSearch is an API *backend* — it returns structured results, extracted content, and metadata for your agent to reason over. Different layers of the stack.
-
-</details>
-
-<details>
-<summary><b>Does the job search actually scrape LinkedIn/Indeed?</b></summary>
-
-<br />
-
-It searches through SearXNG engines that index job boards. It doesn't log into those sites or bypass their APIs. Result quality depends on which engines you enable and how those sites expose their listings to search engines. Set expectations accordingly.
-
-</details>
-
-<details>
-<summary><b>What about rate limiting from upstream engines?</b></summary>
-
-<br />
-
-SearXNG rotates across engines and handles rate limiting internally. AgentSearch adds its own caching layer (default 1-hour TTL) so repeated queries don't hit upstream at all. In practice, moderate usage (a few hundred queries/day) runs fine. For heavy automation, enable more engines to spread the load.
-
-</details>
-
-<details>
-<summary><b>Is the self-improvement loop (<code>/adapt/evolve</code>) using an LLM?</b></summary>
-
-<br />
-
-No. It's deterministic — it tracks which URLs fail extraction, which strategies succeed, and adjusts the kill chain ordering based on observed patterns. No API calls, no model inference, no costs.
-
-</details>
-
-<details>
-<summary><b>Can I expose this to the internet?</b></summary>
-
-<br />
-
-You can, but set `AGENT_SEARCH_TOKEN` first. The default `docker-compose` binds to `127.0.0.1:3939` (localhost only). If you put it behind a reverse proxy, use the token auth and keep rate limits tight.
-
-</details>
-
-<details>
-<summary><b>What's the kill chain?</b></summary>
-
-<br />
-
-A sequence of 9 content extraction strategies tried in order: direct HTTP fetch, readability parsing, user-agent rotation, JavaScript-rendered fallback, Wayback Machine, Google Cache, and several others. If strategy 1 fails, it tries strategy 2, and so on. Most URLs resolve on strategies 1–3. The chain exists for the stubborn ones.
-
-</details>
-
-<details>
-<summary><b>Why not just use Tavily or Exa?</b></summary>
-
-<br />
-
-Go for it, if the pricing works for your volume and you're comfortable sending every query to a third party. AgentSearch exists for the cases where those constraints matter: cost at scale, data sensitivity, custom engine mixes, or simply wanting to own your infra.
-
-</details>
-
-<br />
-
-## 🗺️ Roadmap
-
-- [ ] Semantic re-ranking layer (optional, BYO embedding model)
-- [ ] Redis-backed cache for multi-instance deployments
-- [ ] Additional kill chain strategies (headless browser pool, Archive.today)
-- [ ] Prometheus metrics endpoint
-- [ ] Async Python client
-- [ ] Postgres-backed adaptation store (currently in-memory)
-
-Have ideas? [Open an issue](https://github.com/brcrusoe72/agent-search/issues) or drop a PR.
-
-<br />
-
-## 🤝 Contributing
-
-```bash
-# 1. Fork it
-# 2. Create your branch
-git checkout -b feature/better-dedup
-
-# 3. Commit
-git commit -am 'Improve dedup algorithm'
-
-# 4. Push
-git push origin feature/better-dedup
-
-# 5. Open a PR
-```
-
-Bug reports, feature requests, and documentation improvements are all welcome. For larger changes, open an issue first so we can discuss scope.
-
-<br />
-
-## 🙏 Acknowledgments
-
-Built on the shoulders of [**SearXNG**](https://github.com/searxng/searxng) — a privacy-respecting metasearch engine that does the hard work of engine rotation and result federation. AgentSearch wouldn't exist without it.
-
-Also inspired by the broader ecosystem of agent infrastructure tooling: [LangChain](https://github.com/langchain-ai/langchain), [Model Context Protocol](https://modelcontextprotocol.io), [Ollama](https://github.com/ollama/ollama), and the many others proving that self-hosted is not only viable, but often better.
-
-<br />
-
-## 📄 License
-
-MIT — do whatever you want with it. See [LICENSE](LICENSE) for details.
-
-<br />
-
-<div align="center">
-
-**If AgentSearch saves you an afternoon, consider [⭐ starring the repo](https://github.com/brcrusoe72/agent-search).**
-
-*Built for agents. Owned by you.*
-
-</div>
+MIT

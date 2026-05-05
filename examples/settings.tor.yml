@@ -1,0 +1,165 @@
+use_default_settings: true
+
+general:
+  instance_name: "AgentSearch SearXNG (Tor)"
+  debug: false
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "en"
+  formats:
+    - html
+    - json
+
+server:
+  # CHANGE THIS — generate with: python3 -c "import secrets; print(secrets.token_urlsafe(48))"
+  secret_key: "CHANGE_ME_GENERATE_A_RANDOM_KEY"
+  limiter: false
+  image_proxy: false
+  port: 8080
+  bind_address: "0.0.0.0"
+
+ui:
+  static_use_hash: true
+
+engines:
+  # Primary search
+  - name: google
+    engine: google
+    shortcut: g
+    disabled: false
+    weight: 1.5
+
+  - name: startpage
+    engine: startpage
+    shortcut: sp
+    disabled: false
+    weight: 1.3
+
+  - name: brave
+    engine: brave
+    shortcut: br
+    disabled: false
+    weight: 1.2
+
+  - name: bing
+    engine: bing
+    shortcut: b
+    disabled: false
+    weight: 0.8
+
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    disabled: false
+    weight: 1.0
+
+  # Scholarly / academic
+  - name: google scholar
+    engine: google_scholar
+    shortcut: gs
+    disabled: false
+    weight: 1.4
+
+  - name: semantic scholar
+    engine: semantic_scholar
+    shortcut: ss
+    disabled: false
+    weight: 1.2
+
+  - name: arxiv
+    engine: arxiv
+    shortcut: ax
+    disabled: false
+
+  - name: crossref
+    engine: crossref
+    shortcut: cr
+    disabled: false
+    weight: 1.1
+
+  - name: openalex
+    engine: openalex
+    shortcut: oa
+    disabled: false
+    weight: 1.1
+
+  - name: pubmed
+    engine: pubmed
+    shortcut: pm
+    disabled: false
+
+  # News
+  - name: google news
+    engine: google_news
+    shortcut: gn
+    disabled: false
+    weight: 1.3
+
+  - name: bing news
+    engine: bing_news
+    shortcut: bn
+    disabled: false
+
+  - name: yahoo news
+    engine: yahoo_news
+    shortcut: yn
+    disabled: false
+
+  - name: wikinews
+    engine: wikinews
+    shortcut: wn
+    disabled: false
+
+  # Reference
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: w
+    disabled: false
+    weight: 0.5
+
+  - name: wikidata
+    engine: wikidata
+    shortcut: wd
+    disabled: false
+
+  # Community / tech
+  - name: huggingface
+    engine: huggingface
+    shortcut: hf
+    disabled: false
+
+  - name: reddit
+    engine: reddit
+    shortcut: re
+    disabled: false
+
+  - name: hackernews
+    engine: hackernews
+    shortcut: hn
+    disabled: false
+
+  - name: stackoverflow
+    engine: stackoverflow
+    shortcut: so
+    disabled: false
+
+  - name: github
+    engine: github
+    shortcut: gh
+    disabled: false
+
+  - name: lobsters
+    engine: lobsters
+    shortcut: lo
+    disabled: false
+
+outgoing:
+  request_timeout: 8.0
+  max_request_timeout: 15.0
+  pool_connections: 100
+  pool_maxsize: 20
+  proxies:
+    all://:
+      - socks5h://tor:9050
