@@ -13,3 +13,12 @@ venv/
 searxng/uwsgi.ini
 data/*.db
 .mcpregistry_*
+
+# local-only secret-bearing files
+searxng/settings.yml
+searxng/settings.tor.yml
+/torproxy/
+compose.local.yml
+dns/
+
+# examples/ is publishable (secrets stripped) — don't ignore it
