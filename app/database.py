@@ -2,6 +2,7 @@
 
 import sqlite3
 import asyncio
+import os
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -11,8 +12,9 @@ from contextlib import asynccontextmanager
 class QueryDatabase:
     """Simple SQLite database for tracking queries and engine performance."""
     
-    def __init__(self, db_path: str = "/app/data/query_log.db"):
-        self.db_path = db_path
+    def __init__(self, db_path: str | None = None):
+        data_dir = Path(os.getenv("DATA_DIR", "data"))
+        self.db_path = db_path or str(data_dir / "query_log.db")
         self._ensure_data_dir()
         self._init_db()
     

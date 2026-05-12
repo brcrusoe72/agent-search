@@ -13,6 +13,17 @@ curl "http://localhost:3939/search?q=distributed+consensus+algorithms"
 
 Three commands. You now have a deduplicated, multi-engine search API running on `:3939`.
 
+Prefer not to use Docker for the API server?
+
+```bash
+git clone https://github.com/brcrusoe72/agent-search.git
+cd agent-search
+./scripts/install-native.sh
+./scripts/run-native.sh
+```
+
+Native mode requires Python 3.11+ and a reachable SearXNG instance with JSON output enabled. It stores AgentSearch state in `./data`. See [Native Install](docs/native-install.md).
+
 ---
 
 ## What it does
