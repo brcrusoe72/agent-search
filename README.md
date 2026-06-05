@@ -211,6 +211,10 @@ pages = client.read_batch(["https://a.com", "https://b.com"])
 print(f"{pages.successful}/{pages.total} succeeded")
 ```
 
+For authenticated instances, pass `token=...` or use `AGENT_SEARCH_TOKEN`,
+`AGENTSEARCH_TOKEN`, `credentials/agent-search-token.txt`, or
+`~/.config/agent-search/token`.
+
 ### LangChain tool
 
 ```python
@@ -232,6 +236,12 @@ def web_search(query: str) -> str:
 ```bash
 pip install mcp httpx
 python mcp-server/server.py
+```
+
+For authenticated instances, set `AGENT_SEARCH_TOKEN` or run:
+
+```bash
+python mcp-server/server.py --token "change-me"
 ```
 
 Add to Claude Desktop config:

@@ -7,10 +7,10 @@ Python client for the [AgentSearch](https://github.com/brcrusoe72/agent-search) 
 ## Install
 
 ```bash
-pip install agentsearch
+pip install agentsearch-client
 
 # Optional: better HTTP performance
-pip install agentsearch[httpx]
+pip install agentsearch-client[fast]
 ```
 
 ## Quick Start
@@ -28,13 +28,23 @@ for r in results.results:
 
 ## API Reference
 
-### `AgentSearch(base_url, timeout=30.0)`
+### `AgentSearch(base_url, timeout=30.0, token=None)`
 
 Create a client instance. If `httpx` is installed, it uses connection pooling automatically.
 
 ```python
 client = AgentSearch("http://localhost:3939", timeout=15.0)
 ```
+
+For an authenticated AgentSearch instance, pass a token or set it locally:
+
+```python
+client = AgentSearch("http://localhost:3939", token="change-me")
+```
+
+If `token` is omitted, the client tries `AGENT_SEARCH_TOKEN`,
+`AGENTSEARCH_TOKEN`, `credentials/agent-search-token.txt`, and
+`~/.config/agent-search/token`.
 
 Supports context manager:
 

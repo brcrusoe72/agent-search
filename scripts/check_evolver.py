@@ -6,20 +6,32 @@ Usage: python3 check_evolver.py [--days N] [--apply]
 
 import sys
 import json
+import os
 import argparse
 import urllib.request
 import urllib.error
 from pathlib import Path
 
-TOKEN_FILE = Path.home() / ".openclaw/workspace/credentials/agent-search-token.txt"
-BASE_URL = "http://localhost:3939"
+BASE_URL = os.getenv("AGENT_SEARCH_URL", "http://localhost:3939").rstrip("/")
 
 
 def load_token():
-    try:
-        return TOKEN_FILE.read_text().strip()
-    except Exception:
-        return None
+    token = (os.environ.get("AGENT_SEARCH_TOKEN") or os.environ.get("AGENTSEARCH_TOKEN") or "").strip()
+    if token:
+        return token
+    for path in [
+        Path.cwd() / "credentials/agent-search-token.txt",
+        Path.home() / ".openclaw/workspace/credentials/agent-search-token.txt",
+        Path.home() / ".config/agent-search/token",
+    ]:
+        try:
+            if path.exists():
+                token = path.read_text().strip()
+                if token:
+                    return token
+        except Exception:
+            continue
+    return None
 
 
 def fetch(path, token, method="GET"):
