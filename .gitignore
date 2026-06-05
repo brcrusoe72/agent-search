@@ -4,6 +4,8 @@ __pycache__/
 dist/
 build/
 .env
+.env.native
+.env.local
 .venv/
 venv/
 *.egg
@@ -15,6 +17,10 @@ data/*.db
 .mcpregistry_*
 
 # local-only secret-bearing files
+credentials/*
+!credentials/.gitignore
+!credentials/README.md
+!credentials/*.example
 searxng/settings.yml
 searxng/settings.tor.yml
 /torproxy/

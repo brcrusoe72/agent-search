@@ -51,7 +51,7 @@ from app.domain_trust import evaluate_trust, format_trust_tag, TrustResult
 # Configuration
 # ---------------------------------------------------------------------------
 
-ADAPTERS_DIR = Path(os.getenv("ADAPTERS_DIR", "/app/adapters"))
+ADAPTERS_DIR = Path(os.getenv("ADAPTERS_DIR", "adapters"))
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -98,7 +98,7 @@ BLOCKED_FETCH_DOMAINS = {
 }
 
 # Dynamic blocklist — loaded from file, written by evolver auto-apply
-DYNAMIC_BLOCKLIST_PATH = Path(os.getenv("DATA_DIR", "/app/data")) / "blocked_domains.txt"
+DYNAMIC_BLOCKLIST_PATH = Path(os.getenv("DATA_DIR", "data")) / "blocked_domains.txt"
 
 
 def _load_dynamic_blocklist() -> set[str]:

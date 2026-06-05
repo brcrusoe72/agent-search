@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import sqlite3
 import time
 from pathlib import Path
@@ -42,9 +43,10 @@ STRATEGY_TTL = {
 class ContentCache:
     """SQLite-backed content cache with per-strategy TTLs."""
 
-    def __init__(self, db_path: str = "/app/data/content_cache.db"):
-        self.db_path = db_path
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    def __init__(self, db_path: str | None = None):
+        data_dir = Path(os.getenv("DATA_DIR", "data"))
+        self.db_path = db_path or str(data_dir / "content_cache.db")
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
         self._stats = {"hits": 0, "misses": 0, "sets": 0, "evictions": 0}
 
