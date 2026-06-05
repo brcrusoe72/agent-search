@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote_plus, urlencode, urljoin
@@ -48,19 +50,44 @@ class AgentSearch:
             print(r.title, r.url)
     """
 
-    def __init__(self, base_url: str = "http://localhost:3939", timeout: float = 30.0):
+    def __init__(self, base_url: str = "http://localhost:3939", timeout: float = 30.0, token: str | None = None):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.token = token or self._load_token()
         self._session: Any = None
 
         # Try to use httpx for connection pooling
         try:
             import httpx  # type: ignore
 
-            self._session = httpx.Client(base_url=self.base_url, timeout=timeout)
+            self._session = httpx.Client(base_url=self.base_url, timeout=timeout, headers=self._headers())
             self._backend = "httpx"
         except ImportError:
             self._backend = "urllib"
+
+    def _load_token(self) -> str | None:
+        token = (os.environ.get("AGENT_SEARCH_TOKEN") or os.environ.get("AGENTSEARCH_TOKEN") or "").strip()
+        if token:
+            return token
+        for path in [
+            Path.cwd() / "credentials/agent-search-token.txt",
+            Path.home() / ".openclaw/workspace/credentials/agent-search-token.txt",
+            Path.home() / ".config/agent-search/token",
+        ]:
+            try:
+                if path.exists():
+                    token = path.read_text().strip()
+                    if token:
+                        return token
+            except Exception:
+                continue
+        return None
+
+    def _headers(self) -> Dict[str, str]:
+        headers = {"Accept": "application/json"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        return headers
 
     def close(self) -> None:
         """Close the underlying HTTP session."""
@@ -101,7 +128,7 @@ class AgentSearch:
             filtered = {k: v for k, v in params.items() if v is not None}
             if filtered:
                 url += "?" + urlencode(filtered, doseq=True)
-        req = Request(url, headers={"Accept": "application/json"})
+        req = Request(url, headers=self._headers())
         try:
             with urlopen(req, timeout=self.timeout) as resp:
                 return json.loads(resp.read())
@@ -141,8 +168,8 @@ class AgentSearch:
         url = self.base_url + path
         data = json.dumps(body).encode()
         req = Request(url, data=data, headers={
+            **self._headers(),
             "Content-Type": "application/json",
-            "Accept": "application/json",
         })
         try:
             with urlopen(req, timeout=self.timeout) as resp:
