@@ -26,6 +26,9 @@ Edit `.env.native` if your SearXNG instance is not at `http://localhost:8080`, t
 ./scripts/run-native.sh
 ```
 
+`.env.native` is ignored by git. Keep local runtime settings there instead of in
+shell startup files like `~/.bashrc`.
+
 Verify:
 
 ```bash
@@ -116,6 +119,8 @@ If `AGENT_SEARCH_TOKEN` is set, all endpoints except `/health` require:
 curl -H "Authorization: Bearer $AGENT_SEARCH_TOKEN" \
   "http://localhost:3939/search?q=agent+search"
 ```
+
+For safer local token storage, see [Secret Handling](secrets.md).
 
 ## Notes
 
