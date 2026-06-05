@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentsearch-api"
+version = "2.0.0"
+description = "Self-hosted search and content extraction API for AI agents."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "fastapi==0.115.6",
+    "uvicorn[standard]==0.34.0",
+    "httpx[socks]==0.28.1",
+    "pydantic==2.10.4",
+    "beautifulsoup4==4.12.2",
+    "pdfplumber>=0.11.4,<0.12",
+    "lxml==5.1.0",
+    "requests[socks]==2.32.3",
+    "yt-dlp>=2025.3.31",
+    "python-whois>=0.9.4",
+]
+
+[project.scripts]
+agent-search = "app.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["app*"]

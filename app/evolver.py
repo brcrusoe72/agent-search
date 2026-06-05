@@ -26,15 +26,16 @@ import os
 
 logger = logging.getLogger("agentsearch.evolver")
 
-ADAPTERS_DIR = Path("/app/adapters")
-DYNAMIC_BLOCKLIST_PATH = Path(os.getenv("DATA_DIR", "/app/data")) / "blocked_domains.txt"
+ADAPTERS_DIR = Path(os.getenv("ADAPTERS_DIR", "adapters"))
+DYNAMIC_BLOCKLIST_PATH = Path(os.getenv("DATA_DIR", "data")) / "blocked_domains.txt"
 
 
 class Evolver:
     """Analyzes fetch patterns and recommends improvements."""
 
-    def __init__(self, db_path: str = "/app/data/content_cache.db"):
-        self.db_path = db_path
+    def __init__(self, db_path: str | None = None):
+        data_dir = Path(os.getenv("DATA_DIR", "data"))
+        self.db_path = db_path or str(data_dir / "content_cache.db")
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
