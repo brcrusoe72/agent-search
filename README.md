@@ -13,6 +13,14 @@ curl "http://localhost:3939/search?q=distributed+consensus+algorithms"
 
 Three commands. You now have a deduplicated, multi-engine search API running on `:3939`.
 
+If you enable auth, pass the token on all non-health endpoints:
+
+```bash
+export AGENT_SEARCH_TOKEN="change-me"
+curl -H "Authorization: Bearer $AGENT_SEARCH_TOKEN" \
+  "http://localhost:3939/search?q=distributed+consensus+algorithms"
+```
+
 Prefer not to use Docker for the API server?
 
 ```bash
@@ -23,6 +31,31 @@ cd agent-search
 ```
 
 Native mode requires Python 3.11+ and a reachable SearXNG instance with JSON output enabled. It stores AgentSearch state in `./data`. See [Native Install](docs/native-install.md).
+
+## Verify
+
+Run the self-contained test suite:
+
+```bash
+python -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt pytest requests
+pytest tests -q
+```
+
+Those tests mock SearXNG, so they do not require Docker or a running local service.
+
+Run the optional live localhost check:
+
+```bash
+AGENTSEARCH_INTEGRATION=1 pytest tests -q
+```
+
+If your local instance requires auth:
+
+```bash
+AGENT_SEARCH_TOKEN="change-me" AGENTSEARCH_INTEGRATION=1 pytest tests -q
+```
 
 ---
 
