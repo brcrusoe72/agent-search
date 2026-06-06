@@ -12,7 +12,7 @@ Homepage = "https://github.com/brcrusoe72/agent-search"
 Repository = "https://github.com/brcrusoe72/agent-search"
 
 [project.scripts]
-agent-search-mcp = "agent_search_mcp.server:main"
+agent-search-mcp = "agent_search_mcp.server:cli"
 
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]

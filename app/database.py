@@ -1,7 +1,6 @@
 """SQLite database for query logging and statistics."""
 
 import sqlite3
-import asyncio
 import os
 import time
 from pathlib import Path
@@ -48,49 +47,42 @@ class QueryDatabase:
     async def log_query(self, query: str, engines: List[str], result_count: int, response_time_ms: float):
         """Log a search query with results."""
         timestamp = time.time()
-        
-        # Run in thread pool to avoid blocking
-        def _insert():
-            with sqlite3.connect(self.db_path) as conn:
-                for engine in engines:
-                    conn.execute("""
-                        INSERT INTO query_log (query, timestamp, engine, result_count, response_time_ms)
-                        VALUES (?, ?, ?, ?, ?)
-                    """, (query, timestamp, engine, result_count, response_time_ms))
-                conn.commit()
-        
-        await asyncio.get_event_loop().run_in_executor(None, _insert)
+
+        with sqlite3.connect(self.db_path) as conn:
+            for engine in engines:
+                conn.execute("""
+                    INSERT INTO query_log (query, timestamp, engine, result_count, response_time_ms)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (query, timestamp, engine, result_count, response_time_ms))
+            conn.commit()
     
     async def get_stats(self) -> Dict:
         """Get query statistics."""
-        def _get_stats():
-            with sqlite3.connect(self.db_path) as conn:
-                conn.row_factory = sqlite3.Row
-                
-                # Total queries
-                total = conn.execute("SELECT COUNT(DISTINCT query) FROM query_log").fetchone()[0]
-                
-                # Queries per engine
-                engine_counts = {}
-                for row in conn.execute("SELECT engine, COUNT(*) as count FROM query_log GROUP BY engine"):
-                    engine_counts[row['engine']] = row['count']
-                
-                # Average results per engine
-                avg_results = {}
-                for row in conn.execute("""
-                    SELECT engine, AVG(result_count) as avg_results 
-                    FROM query_log 
-                    GROUP BY engine
-                """):
-                    avg_results[row['engine']] = round(row['avg_results'], 2)
-                
-                return {
-                    'total_queries': total,
-                    'queries_per_engine': engine_counts,
-                    'avg_results_per_engine': avg_results
-                }
-        
-        return await asyncio.get_event_loop().run_in_executor(None, _get_stats)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+
+            # Total queries
+            total = conn.execute("SELECT COUNT(DISTINCT query) FROM query_log").fetchone()[0]
+
+            # Queries per engine
+            engine_counts = {}
+            for row in conn.execute("SELECT engine, COUNT(*) as count FROM query_log GROUP BY engine"):
+                engine_counts[row['engine']] = row['count']
+
+            # Average results per engine
+            avg_results = {}
+            for row in conn.execute("""
+                SELECT engine, AVG(result_count) as avg_results
+                FROM query_log
+                GROUP BY engine
+            """):
+                avg_results[row['engine']] = round(row['avg_results'], 2)
+
+            return {
+                'total_queries': total,
+                'queries_per_engine': engine_counts,
+                'avg_results_per_engine': avg_results
+            }
 
 
 # Global instance

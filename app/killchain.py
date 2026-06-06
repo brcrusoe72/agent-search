@@ -38,7 +38,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup
@@ -135,6 +135,7 @@ MIN_USEFUL_CHARS = 200  # Content shorter than this is probably garbage
 WAYBACK_TIMEOUT = 20.0
 GOOGLE_CACHE_TIMEOUT = 5.0  # Google's public cache is effectively dead; fail fast
 YT_DLP_TIMEOUT = 90
+MAX_REDIRECTS = 5
 
 import logging
 logger = logging.getLogger("agentsearch.killchain")
@@ -163,15 +164,15 @@ def is_safe_url(url: str, verbose: bool = False) -> bool:
             logger.warning(f"BLOCKED: non-HTTP scheme '{parsed.scheme}'")
         return False
 
-    # Warn on plain HTTP (content could be tampered via MITM)
-    if parsed.scheme == "http" and verbose:
-        logger.warning(f"DEGRADED: plain HTTP URL (no TLS) — {hostname}")
-
     hostname = parsed.hostname
     if not hostname:
         if verbose:
             logger.warning("BLOCKED: no hostname in URL")
         return False
+
+    # Warn on plain HTTP (content could be tampered via MITM)
+    if parsed.scheme == "http" and verbose:
+        logger.warning(f"DEGRADED: plain HTTP URL (no TLS) — {hostname}")
 
     hostname_lower = hostname.lower()
 
@@ -218,6 +219,41 @@ def is_safe_url(url: str, verbose: bool = False) -> bool:
             pass
 
     return True
+
+
+class UnsafeRedirectError(ValueError):
+    """Raised when a redirect target fails the URL safety policy."""
+
+
+async def _safe_get(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    max_redirects: int = MAX_REDIRECTS,
+    **kwargs,
+) -> httpx.Response:
+    """GET a URL while validating every redirect hop before following it."""
+    current_url = url
+    request_kwargs = dict(kwargs)
+    request_kwargs.pop("follow_redirects", None)
+    for _ in range(max_redirects + 1):
+        if not is_safe_url(current_url, verbose=True):
+            raise UnsafeRedirectError(f"Unsafe URL blocked: {current_url}")
+
+        response = await client.get(current_url, follow_redirects=False, **request_kwargs)
+        if not response.is_redirect:
+            return response
+
+        location = response.headers.get("location")
+        if not location:
+            return response
+
+        next_url = urljoin(str(response.url or current_url), location)
+        if not is_safe_url(next_url, verbose=True):
+            raise UnsafeRedirectError(f"Unsafe redirect blocked: {current_url} -> {next_url}")
+        current_url = next_url
+
+    raise UnsafeRedirectError(f"Too many redirects for URL: {url}")
 
 
 # ---------------------------------------------------------------------------
@@ -397,7 +433,8 @@ def _load_adapter(name: str):
 async def strategy_direct(client: httpx.AsyncClient, url: str, ua_index: int = 0) -> Optional[str]:
     """Strategy 1: Direct GET + BeautifulSoup."""
     try:
-        r = await client.get(
+        r = await _safe_get(
+            client,
             url,
             timeout=FETCH_TIMEOUT,
             headers={
@@ -405,7 +442,6 @@ async def strategy_direct(client: httpx.AsyncClient, url: str, ua_index: int = 0
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.9",
             },
-            follow_redirects=True,
         )
         if r.status_code in (403, 429):
             return None
@@ -423,11 +459,11 @@ async def strategy_direct(client: httpx.AsyncClient, url: str, ua_index: int = 0
 async def strategy_readability(client: httpx.AsyncClient, url: str) -> Optional[str]:
     """Strategy 2: Readability-style extraction — score blocks by paragraph density."""
     try:
-        r = await client.get(
+        r = await _safe_get(
+            client,
             url,
             timeout=FETCH_TIMEOUT,
             headers={"User-Agent": USER_AGENTS[0]},
-            follow_redirects=True,
         )
         if not r.is_success:
             return None
@@ -478,11 +514,11 @@ async def strategy_wayback(client: httpx.AsyncClient, url: str) -> Optional[str]
             if len(data) > 1:  # First row is headers
                 timestamp = data[1][1]
                 snapshot_url = f"https://web.archive.org/web/{timestamp}/{url}"
-                r2 = await client.get(
+                r2 = await _safe_get(
+                    client,
                     snapshot_url,
                     timeout=WAYBACK_TIMEOUT,
                     headers={"User-Agent": USER_AGENTS[0]},
-                    follow_redirects=True,
                 )
                 if r2.is_success:
                     text = clean_html(r2.text)
@@ -501,11 +537,11 @@ async def strategy_google_cache(client: httpx.AsyncClient, url: str) -> Optional
     """
     try:
         cache_url = f"https://webcache.googleusercontent.com/search?q=cache:{url}"
-        r = await client.get(
+        r = await _safe_get(
+            client,
             cache_url,
             timeout=GOOGLE_CACHE_TIMEOUT,
             headers={"User-Agent": USER_AGENTS[0]},
-            follow_redirects=True,
         )
         if r.is_success:
             html = r.text
@@ -597,7 +633,35 @@ def strategy_pdf_sync(url: str) -> Optional[str]:
         import requests as req
 
         # Stream download with size check
-        r = req.get(url, timeout=30, headers={"User-Agent": USER_AGENTS[0]}, stream=True)
+        current_url = url
+        r = None
+        for _ in range(MAX_REDIRECTS + 1):
+            if not is_safe_url(current_url, verbose=True):
+                raise UnsafeRedirectError(f"Unsafe URL blocked: {current_url}")
+
+            r = req.get(
+                current_url,
+                timeout=30,
+                headers={"User-Agent": USER_AGENTS[0]},
+                stream=True,
+                allow_redirects=False,
+            )
+            if not 300 <= r.status_code < 400:
+                break
+
+            location = r.headers.get("Location")
+            r.close()
+            if not location:
+                break
+
+            next_url = urljoin(current_url, location)
+            if not is_safe_url(next_url, verbose=True):
+                raise UnsafeRedirectError(f"Unsafe redirect blocked: {current_url} -> {next_url}")
+            current_url = next_url
+        else:
+            raise UnsafeRedirectError(f"Too many redirects for URL: {url}")
+
+        assert r is not None
         r.raise_for_status()
 
         # Check Content-Length header first
