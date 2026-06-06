@@ -1,6 +1,6 @@
 # AgentSearch
 
-Self-hosted search API for AI agents. 16 endpoints. 9-strategy content extraction. Optional Tor-anonymized stack. No API keys, no per-query fees, no vendor lock-in.
+Self-hosted search API for AI agents. 16 endpoints. 9-strategy content extraction. Optional Tor-anonymized stack. No third-party search API keys, no per-query fees, no vendor lock-in. Optional local bearer auth is supported.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![PyPI](https://img.shields.io/pypi/v/agentsearch-client)](https://pypi.org/project/agentsearch-client/)
 
@@ -67,6 +67,18 @@ AgentSearch wraps [SearXNG](https://github.com/searxng/searxng) with a FastAPI l
 
 **Private stack** — `docker compose -f docker-compose.yml -f examples/compose.private.yml up` adds an anonymized instance on `:3940` that routes all traffic through Tor with Snowflake obfuscation. Encrypted DNS via CoreDNS → Cloudflare DoT. Network-level isolation — the private stack physically cannot egress without Tor.
 
+## Search engines
+
+AgentSearch delegates engine support to the connected SearXNG instance. The authoritative list for a running stack is:
+
+```bash
+curl "http://localhost:3939/engines"
+```
+
+The bundled `searxng/settings.yml` explicitly enables 23 engines: Google, Startpage, Brave, Bing, DuckDuckGo, Google Scholar, Semantic Scholar, arXiv, Crossref, OpenAlex, PubMed, Google News, Bing News, Yahoo News, Wikinews, Wikipedia, Wikidata, Hugging Face, Reddit, Hacker News, Stack Overflow, GitHub, and Lobsters.
+
+Because SearXNG is configured with `use_default_settings: true`, your live instance may expose additional enabled engines from the installed SearXNG catalog. Use the `engines=` query parameter to request specific engines, and use `/engines` to verify what is available in that deployment.
+
 ## Why not just use SearXNG directly?
 
 SearXNG finds pages. AgentSearch finds pages, reads them, scores them, deduplicates them, caches them, scrubs prompt injections out of them, detects paywalls, falls back through 9 extraction strategies when the first one fails, and gets better at it over time. One API call.
@@ -93,6 +105,7 @@ SearXNG finds pages. AgentSearch finds pages, reads them, scores them, deduplica
 | `/search/jobs` | GET | Job search across LinkedIn, Indeed, Glassdoor, ZipRecruiter |
 | `/search/policy` | GET | Policy and regulatory document search |
 | `/search/sources` | GET | Source discovery with institutional filtering |
+| `/search/sources/institutions` | GET | List source registry institutions |
 | `/search/stats` | GET | Query statistics and cache metrics |
 | `/news` | GET | Structured multi-source news (Google News, Bing News, Yahoo News) |
 
@@ -277,7 +290,7 @@ Port 3939 (direct)                    Port 3940 (Tor-anonymized)
 │ scoring │  │    SearXNG      │     │ Tor egress  │  │ SearXNG-priv  │
 │ cache   │──│ Google, Bing,   │     │ only        │──│ (tor-internal │
 │ scrub   │  │ DDG, Brave,     │     └─────────────┘  │  network)     │
-│ killchn │  │ Startpage, +20  │                       └───────┬───────┘
+│ killchn │  │ /engines list   │                       └───────┬───────┘
 │ trust   │  └─────────────────┘                               │
 │ evolver │                                              ┌─────┴─────┐
 └─────────┘                                              │    Tor    │
@@ -292,8 +305,8 @@ Port 3939 (direct)                    Port 3940 (Tor-anonymized)
 
 | Module | LOC | What it does |
 |---|---|---|
-| `killchain.py` | 954 | 9-strategy escalating content extraction |
-| `main.py` | 909 | FastAPI app, 16 endpoints, auth, rate limiting |
+| `killchain.py` | 1016 | 9-strategy escalating content extraction |
+| `main.py` | 920 | FastAPI app, 16 endpoints, auth, rate limiting |
 | `source_tracer.py` | 620 | Source provenance tracking and citation chains |
 | `scrubber.py` | 539 | Prompt injection detection and content sanitization |
 | `source_library.py` | 310 | Curated institutional source registry |
@@ -324,6 +337,15 @@ Environment variables (set in `docker-compose.yml` or `.env`):
 | `AGENT_SEARCH_TOKEN` | *(empty)* | Bearer token for auth (optional) |
 | `ADAPTERS_DIR` | `/app/adapters` | Path to pluggable adapter modules |
 
+## Limitations and security notes
+
+- Search engines, news engines, rate limits, and failure modes depend on the connected SearXNG instance. `/engines` is the live source of truth.
+- Bearer auth is a simple local API gate, not a multi-user authorization system. Treat `AGENT_SEARCH_TOKEN` as a shared service token.
+- Rate limiting is in memory. It resets on restart and is per API process.
+- Content extraction validates the starting URL and every redirect hop before fetching redirected content, but fetched third-party pages are still untrusted and are scrubbed before being returned.
+- Google Cache is unreliable because public cache availability changes frequently.
+- The Tor/private stack is intentionally slower than direct search.
+
 ## Development
 
 ```bash
@@ -342,4 +364,4 @@ Issues and PRs welcome. If you're building an agent that needs search, this is f
 
 ## License
 
-MIT
+The root AgentSearch API, SDK, Docker stack, and docs are MIT licensed. The MCP server under `mcp-server/` is AGPL-3.0 licensed; see [mcp-server/LICENSE](mcp-server/LICENSE).

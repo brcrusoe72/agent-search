@@ -3,7 +3,9 @@
 
 import argparse
 import json
+import os
 import sys
+from pathlib import Path
 
 import httpx
 from mcp.server import Server
@@ -13,16 +15,39 @@ from mcp.types import TextContent, Tool
 BASE_URL = "http://localhost:3939"
 
 
-def make_server(base_url: str) -> Server:
+def load_token() -> str | None:
+    """Load AgentSearch bearer token from env or common local credential files."""
+    env_token = os.getenv("AGENT_SEARCH_TOKEN") or os.getenv("AGENTSEARCH_TOKEN")
+    if env_token:
+        return env_token.strip()
+
+    candidates = [
+        Path.cwd() / "credentials" / "agent-search-token.txt",
+        Path.home() / ".openclaw" / "workspace" / "credentials" / "agent-search-token.txt",
+        Path.home() / ".config" / "agent-search" / "token",
+    ]
+    for path in candidates:
+        try:
+            if path.exists():
+                token = path.read_text(encoding="utf-8").strip()
+                if token:
+                    return token
+        except OSError:
+            continue
+    return None
+
+
+def make_server(base_url: str, token: str | None = None) -> Server:
     server = Server("agent-search")
     timeout = httpx.Timeout(120, connect=10)
+    headers = {"Authorization": f"Bearer {token}"} if token else None
 
     @server.list_tools()
     async def list_tools() -> list[Tool]:
         return [
             Tool(
                 name="search",
-                description="Web search across 93+ engines (Google, Bing, Brave, DDG, etc). Returns ranked results with titles, URLs, and snippets.",
+                description="SearXNG-backed web search. Run AgentSearch /engines for the live engine list. Returns ranked results with titles, URLs, and snippets.",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -69,7 +94,7 @@ def make_server(base_url: str) -> Server:
             ),
             Tool(
                 name="news",
-                description="Structured news search from 9+ news engines (Google News, Bing News, Reuters, Yahoo, Brave, etc).",
+                description="Structured news search using the news engines enabled in the connected SearXNG instance.",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -95,7 +120,7 @@ def make_server(base_url: str) -> Server:
     @server.call_tool()
     async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         try:
-            async with httpx.AsyncClient(base_url=base_url, timeout=timeout) as client:
+            async with httpx.AsyncClient(base_url=base_url, timeout=timeout, headers=headers) as client:
                 if name == "search":
                     params = {"q": arguments["query"], "count": arguments.get("count", 10)}
                     if arguments.get("fetch"):
@@ -135,8 +160,8 @@ def make_server(base_url: str) -> Server:
     return server
 
 
-async def main(base_url: str):
-    server = make_server(base_url)
+async def main(base_url: str, token: str | None = None):
+    server = make_server(base_url, token=token or load_token())
     async with stdio_server() as (read, write):
         await server.run(read, write, server.create_initialization_options())
 
@@ -147,6 +172,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="AgentSearch MCP Server")
     parser.add_argument("--port", type=int, default=3939, help="AgentSearch port (default: 3939)")
     parser.add_argument("--host", default="localhost", help="AgentSearch host (default: localhost)")
+    parser.add_argument("--token", default=None, help="AgentSearch bearer token (default: env or local credential file)")
     args = parser.parse_args()
 
-    asyncio.run(main(f"http://{args.host}:{args.port}"))
+    asyncio.run(main(f"http://{args.host}:{args.port}", token=args.token))

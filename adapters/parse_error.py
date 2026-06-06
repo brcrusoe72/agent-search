@@ -1,7 +1,8 @@
 """Adapter for pages with malformed HTML that crash standard parsers."""
 
 import re
-import requests
+
+from adapters.safe_fetch import safe_requests_get
 
 MIN_CHARS = 300
 MAX_CHARS = 15000
@@ -10,11 +11,10 @@ MAX_CHARS = 15000
 def fetch_content(url: str) -> str | None:
     """Extract text from malformed HTML using regex fallback."""
     try:
-        r = requests.get(
+        r = safe_requests_get(
             url,
             timeout=15,
             headers={"User-Agent": "Mozilla/5.0 (compatible; AgentSearch/2.0)"},
-            allow_redirects=True,
         )
         if not r.ok:
             return None

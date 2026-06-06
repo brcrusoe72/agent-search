@@ -9,6 +9,8 @@ import httpx
 import logging
 from typing import Optional, Dict
 
+from adapters.safe_fetch import safe_httpx_get
+
 logger = logging.getLogger(__name__)
 
 # Domains known to use aggressive Cloudflare protection
@@ -71,7 +73,6 @@ async def extract(url: str, timeout: int = 30) -> Optional[Dict]:
         try:
             async with httpx.AsyncClient(
                 timeout=timeout,
-                follow_redirects=True,
                 headers={
                     "User-Agent": ua,
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -80,7 +81,7 @@ async def extract(url: str, timeout: int = 30) -> Optional[Dict]:
                     "Cache-Control": "no-cache",
                 }
             ) as client:
-                resp = await client.get(url)
+                resp = await safe_httpx_get(client, url)
                 if resp.status_code == 200:
                     text = resp.text
                     # Check if we got real content, not a challenge page
@@ -97,8 +98,8 @@ async def extract(url: str, timeout: int = 30) -> Optional[Dict]:
     # Strategy 2: Google Cache
     try:
         cache_url = f"https://webcache.googleusercontent.com/search?q=cache:{url}"
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-            resp = await client.get(cache_url)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await safe_httpx_get(client, cache_url)
             if resp.status_code == 200 and not _is_challenge_page(resp.text):
                 return {
                     "content": resp.text,
@@ -111,8 +112,8 @@ async def extract(url: str, timeout: int = 30) -> Optional[Dict]:
     # Strategy 3: Wayback Machine
     try:
         wb_url = f"https://web.archive.org/web/2/{url}"
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-            resp = await client.get(wb_url)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await safe_httpx_get(client, wb_url)
             if resp.status_code == 200 and not _is_challenge_page(resp.text):
                 return {
                     "content": resp.text,

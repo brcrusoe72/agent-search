@@ -7,6 +7,9 @@ Endpoints:
   /search/extract  — Search + extract content via kill chain
   /search/deep     — Multi-query fusion search
   /search/jobs     — Job board search
+  /search/policy   — Policy/regulatory search
+  /search/sources  — Primary source discovery
+  /search/sources/institutions — List source registry institutions
   /search/stats    — Query statistics
   /read            — Kill chain content extraction (single URL)
   /read/batch      — Kill chain batch extraction (multiple URLs)
@@ -84,15 +87,20 @@ http_client: httpx.AsyncClient | None = None
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Manage async HTTP client and cache lifecycle."""
     global http_client, content_cache, evolver
-    http_client = httpx.AsyncClient(timeout=30.0)
-    content_cache = ContentCache()
-    evolver = Evolver()
+    created_http_client = http_client is None
+    if http_client is None:
+        http_client = httpx.AsyncClient(timeout=30.0)
+    if content_cache is None:
+        content_cache = ContentCache()
+    if evolver is None:
+        evolver = Evolver()
 
     # Periodic cache eviction (every hour)
     async def _evict_loop():
         while True:
             await asyncio.sleep(3600)
             try:
+                assert content_cache is not None
                 count = await content_cache.evict_expired()
                 if count > 0:
                     logger.info(f"Evicted {count} expired cache entries")
@@ -104,7 +112,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
 
     evict_task.cancel()
-    await http_client.aclose()
+    if created_http_client and hasattr(http_client, "aclose"):
+        await http_client.aclose()
 
 
 app = FastAPI(
@@ -237,7 +246,9 @@ async def search(
     if len(q) > 500:
         raise HTTPException(status_code=400, detail="Query too long (max 500 chars)")
 
-    cached_resp = cache.get(q, engines or "", count)
+    cache_domain = domain or ""
+    cache_exclude_domains = exclude_domains or ""
+    cached_resp = cache.get(q, engines or "", count, cache_domain, cache_exclude_domains, fetch)
     if cached_resp is not None:
         cached_resp.meta.cached = True
         cached_resp.meta.response_time_ms = round((time.time() - start) * 1000, 1)
@@ -293,7 +304,7 @@ async def search(
         ),
     )
 
-    cache.set(q, engines or "", count, response)
+    cache.set(q, engines or "", count, response, cache_domain, cache_exclude_domains, fetch)
     return response
 
 

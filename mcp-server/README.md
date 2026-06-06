@@ -6,7 +6,7 @@
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org)
 
-MCP tool server that gives AI agents access to **93+ search engines** (Google, Bing, Brave, DuckDuckGo, Startpage, and more) through a single interface. Self-hosted. No API keys required.
+MCP tool server that gives AI agents access to the engines enabled in your connected SearXNG-backed AgentSearch instance. Self-hosted. No third-party search API keys required; optional local bearer auth is supported.
 
 Built on [AgentSearch](https://github.com/brcrusoe72/agent-search), which wraps SearXNG with multi-engine fusion, a 9-strategy content extraction kill chain, news aggregation, and job search.
 
@@ -14,23 +14,23 @@ Built on [AgentSearch](https://github.com/brcrusoe72/agent-search), which wraps 
 
 | Feature | AgentSearch | Other search MCP servers |
 |---------|-------------|-------------------------|
-| Search engines | 93+ (Google, Bing, Brave, DDG, Startpage...) | Usually 1-3 |
+| Search engines | SearXNG-backed; run `/engines` for the live list | Usually 1-3 |
 | Content extraction | 9-strategy kill chain (handles paywalls, Cloudflare, etc.) | Basic fetch or none |
 | Multi-query fusion | ✓ (generates 3-5 query variations) | ✗ |
-| News aggregation | 9+ dedicated news engines | ✗ |
+| News aggregation | News engines enabled in SearXNG | ✗ |
 | Job search | Dedicated job board search | ✗ |
-| API keys required | None (self-hosted) | Often required |
+| Third-party search API keys required | None (self-hosted) | Often required |
 | Self-improving | Evolver tracks success rates by domain/strategy | ✗ |
 
 ## Tools
 
 | Tool | Description |
 |------|-------------|
-| `search` | Web search across 93+ engines with optional content extraction |
+| `search` | SearXNG-backed web search with optional content extraction |
 | `deep_search` | Multi-query fusion — generates 3-5 query variations and merges results |
 | `read_url` | Extract content from any URL using a 9-strategy kill chain |
 | `read_batch` | Batch extract content from up to 20 URLs concurrently |
-| `news` | Structured news search from 9+ news engines |
+| `news` | Structured news search using enabled SearXNG news engines |
 | `search_jobs` | Job board search across multiple job sites |
 
 ## Prerequisites
@@ -51,7 +51,23 @@ python server.py
 
 # Custom host/port
 python server.py --host 192.168.1.10 --port 4000
+
+# Token-protected AgentSearch
+AGENT_SEARCH_TOKEN="change-me" python server.py
+python server.py --token "change-me"
 ```
+
+The MCP server loads a bearer token from `--token`, `AGENT_SEARCH_TOKEN`, `AGENTSEARCH_TOKEN`, `./credentials/agent-search-token.txt`, `~/.openclaw/workspace/credentials/agent-search-token.txt`, or `~/.config/agent-search/token`.
+
+## Search engines
+
+Engine availability comes from the AgentSearch API and its connected SearXNG instance. Run this against the API to inspect the live catalog:
+
+```bash
+curl "http://localhost:3939/engines"
+```
+
+The bundled AgentSearch SearXNG config explicitly enables 23 engines, and `use_default_settings: true` can expose additional engines from the installed SearXNG catalog. Avoid hard-coding a fixed engine count in clients.
 
 ## Connect from Claude Desktop
 
@@ -136,12 +152,12 @@ Claude / Cursor / any MCP client
         ↓ (HTTP)
   AgentSearch API (localhost:3939)
         ↓
-  SearXNG (93+ engines)
+  SearXNG-backed engine catalog
 ```
 
 ## License
 
-AGPL-3.0 — see [LICENSE](LICENSE).
+The MCP server is AGPL-3.0 — see [LICENSE](LICENSE). The root AgentSearch API and Docker stack are MIT licensed.
 
 ## Links
 

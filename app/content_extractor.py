@@ -14,6 +14,7 @@ from typing import Optional
 import httpx
 from bs4 import BeautifulSoup, Comment
 
+from app.killchain import _safe_get
 from app.scrubber import scrub_content
 
 import logging
@@ -71,13 +72,13 @@ async def fetch_page_content(client: httpx.AsyncClient, url: str) -> Optional[st
     """
     logger.warning(f"DEPRECATED: fetch_page_content called for {url}. Use kill_chain() instead.")
     try:
-        response = await client.get(
+        response = await _safe_get(
+            client,
             url,
             timeout=10.0,
             headers={
                 'User-Agent': 'Mozilla/5.0 (compatible; AgentSearch/2.0; +https://github.com/brcrusoe72/agent-search)'
             },
-            follow_redirects=True
         )
         
         if response.status_code == 200:
