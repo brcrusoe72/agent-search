@@ -19,7 +19,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pytest requests build wheel
           pip install -e sdk
-          pip install -e mcp-server
 
       - name: Prepare local SearXNG config
         run: ./scripts/prepare-searxng.sh
@@ -30,18 +29,28 @@ jobs:
       - name: Compile Python modules
         run: python -m compileall app adapters mcp-server/agent_search_mcp scripts sdk -q
 
-      - name: Check CLI and package imports
+      - name: Check API CLI and SDK imports
         run: |
           python -m app.cli --help
-          python -m agent_search_mcp --help
           python scripts/check_evolver.py --help
           python - <<'PY'
           from agentsearch import AgentSearch
-          from agent_search_mcp.server import make_server
 
           assert AgentSearch is not None
-          assert make_server("http://localhost:3939") is not None
           print("imports ok")
+          PY
+
+      - name: Check MCP package in isolated env
+        run: |
+          python -m venv /tmp/agentsearch-mcp-venv
+          /tmp/agentsearch-mcp-venv/bin/python -m pip install --upgrade pip
+          /tmp/agentsearch-mcp-venv/bin/python -m pip install -e mcp-server
+          /tmp/agentsearch-mcp-venv/bin/python -m agent_search_mcp --help
+          /tmp/agentsearch-mcp-venv/bin/python - <<'PY'
+          from agent_search_mcp.server import make_server
+
+          assert make_server("http://localhost:3939") is not None
+          print("mcp imports ok")
           PY
 
       - name: Build Python packages
