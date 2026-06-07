@@ -17,7 +17,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pytest requests build wheel
+          pip install -r requirements.txt pytest requests build wheel "setuptools>=68"
           pip install -e sdk
 
       - name: Prepare local SearXNG config
