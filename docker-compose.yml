@@ -11,7 +11,10 @@ services:
       - SEARXNG_BASE_URL=http://searxng:8080/
 
   api:
-    build: .
+    build:
+      context: .
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python@sha256:9e01bf1ae5db7649a236da7be1e94ffbbbdd7a93f867dd0d8d5720d9e1f89fab}
     container_name: agent-search-api
     ports:
       - "127.0.0.1:3939:3939"
