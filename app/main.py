@@ -27,6 +27,7 @@ import os
 import re
 import time
 import asyncio
+import secrets
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
@@ -152,7 +153,7 @@ async def auth_middleware(request, call_next):
     """Bearer token auth. Skips /health for monitoring."""
     if _AUTH_TOKEN and request.url.path != "/health":
         auth_header = request.headers.get("Authorization", "")
-        if not auth_header.startswith("Bearer ") or auth_header[7:] != _AUTH_TOKEN:
+        if not auth_header.startswith("Bearer ") or not secrets.compare_digest(auth_header[7:], _AUTH_TOKEN):
             from fastapi.responses import JSONResponse
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
     return await call_next(request)

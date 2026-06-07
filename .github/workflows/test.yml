@@ -64,5 +64,8 @@ jobs:
           docker compose -f docker-compose.yml config --quiet
           docker compose -f docker-compose.yml -f examples/compose.private.yml config --quiet
 
-      - name: Build Docker image
-        run: docker build -t agent-search-api:test .
+      - name: Build Docker images
+        run: |
+          docker build -t agent-search-api:test .
+          docker build -t agent-search-mcp:test mcp-server
+          docker build -t agent-search-tor:test examples/torproxy

@@ -64,6 +64,14 @@ If your local instance requires auth:
 AGENT_SEARCH_TOKEN="change-me" AGENTSEARCH_INTEGRATION=1 pytest tests -q
 ```
 
+Run the optional Docker smoke tests against a running direct/private stack:
+
+```bash
+AGENT_SEARCH_TOKEN="change-me" \
+AGENTSEARCH_DOCKER_INTEGRATION=1 \
+pytest tests/test_live_docker.py -q
+```
+
 ---
 
 ## What it does
@@ -353,6 +361,10 @@ Environment variables (set in `docker-compose.yml` or `.env`):
 |---|---|---|
 | `SEARXNG_URL` | `http://searxng:8080` | SearXNG instance URL |
 | `SEARXNG_IMAGE` | pinned SearXNG digest | SearXNG container image; override only when intentionally upgrading |
+| `PYTHON_BASE_IMAGE` | pinned Python digest | API Docker base image; override only when intentionally upgrading |
+| `COREDNS_IMAGE` | pinned CoreDNS digest | Private-stack DNS image |
+| `SOCAT_IMAGE` | pinned socat digest | Private-stack TCP forwarder image |
+| `TOR_BASE_IMAGE` | pinned Debian digest | Private-stack Tor proxy base image |
 | `CACHE_TTL` | `3600` | Cache duration in seconds |
 | `RATE_LIMIT` | `60` | Max requests per minute |
 | `SQLITE_TIMEOUT` | `1.0` | SQLite lock wait timeout in seconds for query stats |
@@ -365,6 +377,7 @@ Environment variables (set in `docker-compose.yml` or `.env`):
 - Bearer auth is a simple local API gate, not a multi-user authorization system. Treat `AGENT_SEARCH_TOKEN` as a shared service token.
 - Rate limiting is in memory. It resets on restart and is per API process.
 - Query statistics use local SQLite with WAL and a bounded lock timeout. For high-volume multi-worker deployments, move query logging to an external database or telemetry backend.
+- The MCP package intentionally bounds its `mcp` dependency to the tested 1.27.x line. Upgrade deliberately and run the package/CI checks before publishing.
 - Content extraction validates the starting URL and every redirect hop before fetching redirected content, but fetched third-party pages are still untrusted and are scrubbed before being returned.
 - Google Cache is unreliable because public cache availability changes frequently.
 - The Tor/private stack is intentionally slower than direct search.

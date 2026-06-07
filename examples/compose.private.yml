@@ -17,7 +17,7 @@
 services:
   # === Encrypted DNS — CoreDNS forwarding to Cloudflare over DoT ===
   dns:
-    image: coredns/coredns:latest
+    image: ${COREDNS_IMAGE:-coredns/coredns@sha256:b21d26b915e10acb5bc78715c1e8b6047ab2675389b2bcc18b3a6499d90e74c0}
     container_name: agent-search-dns
     command: ["-conf", "/etc/coredns/Corefile"]
     volumes:
@@ -43,7 +43,10 @@ services:
 
   # === Tor with Snowflake obfuscation ===
   tor:
-    build: ./examples/torproxy
+    build:
+      context: ./examples/torproxy
+      args:
+        TOR_BASE_IMAGE: ${TOR_BASE_IMAGE:-debian@sha256:f9c6a2fd2ddbc23e336b6257a5245e31f996953ef06cd13a59fa0a1df2d5c252}
     container_name: agent-search-tor
     networks:
       agent-search:
@@ -70,7 +73,7 @@ services:
 
   # TCP forwarder: host:3940 → api-private:3939
   api-private-frontend:
-    image: alpine/socat:latest
+    image: ${SOCAT_IMAGE:-alpine/socat@sha256:44e7b87dfeddb0f999ce75eedfa140dc97ea5bf7decbd04b2cef6adb5cc331fe}
     container_name: agent-search-api-private-frontend
     command: ["-d", "TCP-LISTEN:3939,fork,reuseaddr", "TCP:api-private:3939"]
     ports:
@@ -83,7 +86,10 @@ services:
     restart: unless-stopped
 
   api-private:
-    build: .
+    build:
+      context: .
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python@sha256:9e01bf1ae5db7649a236da7be1e94ffbbbdd7a93f867dd0d8d5720d9e1f89fab}
     container_name: agent-search-api-private
     environment:
       - SEARXNG_URL=http://searxng-private:8080
