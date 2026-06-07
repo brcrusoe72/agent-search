@@ -68,6 +68,40 @@ class FakeSearxngClient:
         return FakeResponse({})
 
 
+class DomainFakeSearxngClient:
+    async def get(self, url: str, params: dict | None = None, timeout: float | None = None) -> FakeResponse:
+        if url.endswith("/search"):
+            return FakeResponse({
+                "results": [
+                    {
+                        "title": "root domain",
+                        "url": "https://example.com/one",
+                        "content": "Root domain snippet",
+                        "engines": ["duckduckgo"],
+                    },
+                    {
+                        "title": "subdomain",
+                        "url": "https://docs.example.com/two",
+                        "content": "Subdomain snippet",
+                        "engines": ["brave"],
+                    },
+                    {
+                        "title": "lookalike domain",
+                        "url": "https://notexample.com/three",
+                        "content": "Lookalike snippet",
+                        "engines": ["brave"],
+                    },
+                    {
+                        "title": "path mention",
+                        "url": "https://other.test/articles/example.com",
+                        "content": "Path mention snippet",
+                        "engines": ["duckduckgo"],
+                    },
+                ]
+            })
+        return FakeResponse({})
+
+
 class AppClient:
     """Small sync wrapper around ASGITransport for self-contained API tests."""
 
@@ -160,6 +194,40 @@ def test_search_endpoint_cache_distinguishes_domain_filter(client: AppClient) ->
     assert data["results"][0]["url"] == "https://example.org/two"
 
 
+def test_search_domain_filter_matches_hostname_only(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
+    monkeypatch.setattr(main, "http_client", DomainFakeSearxngClient())
+
+    response = client.get("/search", params={"q": "domain filter", "count": 10, "domain": "example.com"})
+
+    assert response.status_code == 200
+    urls = [r["url"] for r in response.json()["results"]]
+    assert urls == ["https://example.com/one", "https://docs.example.com/two"]
+
+
+def test_search_exclude_domains_matches_hostname_only(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
+    monkeypatch.setattr(main, "http_client", DomainFakeSearxngClient())
+
+    response = client.get("/search", params={"q": "domain exclude", "count": 10, "exclude_domains": "example.com"})
+
+    assert response.status_code == 200
+    urls = [r["url"] for r in response.json()["results"]]
+    assert urls == ["https://notexample.com/three", "https://other.test/articles/example.com"]
+
+
+def test_query_database_async_methods_use_bounded_sqlite(tmp_path) -> None:
+    db = QueryDatabase(str(tmp_path / "query_log.db"))
+
+    async def run_queries() -> dict:
+        await db.log_query("bounded sqlite", ["duckduckgo", "brave"], 2, 12.5)
+        return await db.get_stats()
+
+    stats = asyncio.run(run_queries())
+
+    assert stats["total_queries"] == 1
+    assert stats["queries_per_engine"] == {"brave": 1, "duckduckgo": 1}
+    assert stats["avg_results_per_engine"] == {"brave": 2.0, "duckduckgo": 2.0}
+
+
 def test_empty_query_returns_400(client: AppClient) -> None:
     response = client.get("/search", params={"q": ""})
     assert response.status_code == 400
@@ -234,6 +302,41 @@ def test_adapter_safe_requests_get_blocks_unsafe_redirect(monkeypatch: pytest.Mo
         safe_requests_get("https://safe.example/start", timeout=15)
 
     assert requested_urls == ["https://safe.example/start"]
+
+
+def test_wayback_cdx_uses_encoded_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    target_url = "https://target.example/article?a=1&b=2#section"
+    seen_cdx_params: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_cdx_params
+        if request.url.path == "/cdx/search/cdx":
+            seen_cdx_params = dict(request.url.params)
+            return httpx.Response(
+                200,
+                json=[
+                    ["urlkey", "timestamp"],
+                    ["target.example/article", "20200101000000"],
+                ],
+            )
+        return httpx.Response(
+            200,
+            text="<html><body><main><p>" + ("Useful archived text. " * 40) + "</p></main></body></html>",
+        )
+
+    async def run_strategy() -> str | None:
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as async_client:
+            return await killchain.strategy_wayback(async_client, target_url)
+
+    monkeypatch.setattr(killchain, "is_safe_url", lambda url, verbose=False: True)
+
+    result = asyncio.run(run_strategy())
+
+    assert result is not None
+    assert seen_cdx_params["url"] == target_url
+    assert seen_cdx_params["output"] == "json"
+    assert "b" not in seen_cdx_params
 
 
 @pytest.mark.skipif(os.getenv("AGENTSEARCH_INTEGRATION") != "1", reason="Set AGENTSEARCH_INTEGRATION=1 for live localhost tests")

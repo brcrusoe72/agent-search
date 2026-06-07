@@ -1,5 +1,11 @@
 use_default_settings: true
 
+# Copy this file to searxng/settings.yml for local runtime use:
+#   ./scripts/prepare-searxng.sh
+#
+# searxng/settings.yml is intentionally gitignored because it contains the
+# instance secret_key generated for your local SearXNG container.
+
 general:
   instance_name: "AgentSearch SearXNG"
   debug: false
@@ -13,7 +19,7 @@ search:
     - json
 
 server:
-  secret_key: "change-me-override-with-SEARXNG_SECRET"
+  secret_key: "AGENTSEARCH_GENERATE_LOCAL_SECRET"
   limiter: false
   image_proxy: false
   port: 8080

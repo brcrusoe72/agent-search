@@ -7,11 +7,12 @@ Self-hosted search API for AI agents. 16 endpoints. 9-strategy content extractio
 ```bash
 git clone https://github.com/brcrusoe72/agent-search.git
 cd agent-search
+./scripts/prepare-searxng.sh
 docker compose up -d
 curl "http://localhost:3939/search?q=distributed+consensus+algorithms"
 ```
 
-Three commands. You now have a deduplicated, multi-engine search API running on `:3939`.
+You now have a deduplicated, multi-engine search API running on `:3939`.
 
 If you enable auth, pass the token on all non-health endpoints:
 
@@ -40,7 +41,13 @@ Run the self-contained test suite:
 python -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt pytest requests
+pip install -e sdk -e mcp-server
+./scripts/prepare-searxng.sh
 pytest tests -q
+python -m compileall app adapters mcp-server/agent_search_mcp scripts sdk -q
+docker compose -f docker-compose.yml config --quiet
+docker compose -f docker-compose.yml -f examples/compose.private.yml config --quiet
+docker build -t agent-search-api:test .
 ```
 
 Those tests mock SearXNG, so they do not require Docker or a running local service.
@@ -75,7 +82,9 @@ AgentSearch delegates engine support to the connected SearXNG instance. The auth
 curl "http://localhost:3939/engines"
 ```
 
-The bundled `searxng/settings.yml` explicitly enables 23 engines: Google, Startpage, Brave, Bing, DuckDuckGo, Google Scholar, Semantic Scholar, arXiv, Crossref, OpenAlex, PubMed, Google News, Bing News, Yahoo News, Wikinews, Wikipedia, Wikidata, Hugging Face, Reddit, Hacker News, Stack Overflow, GitHub, and Lobsters.
+The bundled `searxng/settings.example.yml` explicitly enables 23 engines: Google, Startpage, Brave, Bing, DuckDuckGo, Google Scholar, Semantic Scholar, arXiv, Crossref, OpenAlex, PubMed, Google News, Bing News, Yahoo News, Wikinews, Wikipedia, Wikidata, Hugging Face, Reddit, Hacker News, Stack Overflow, GitHub, and Lobsters.
+
+Run `./scripts/prepare-searxng.sh` to create ignored local runtime files at `searxng/settings.yml` and `searxng/settings.tor.yml` with generated SearXNG instance secrets. Do not commit those generated files.
 
 Because SearXNG is configured with `use_default_settings: true`, your live instance may expose additional enabled engines from the installed SearXNG catalog. Use the `engines=` query parameter to request specific engines, and use `/engines` to verify what is available in that deployment.
 
@@ -281,6 +290,7 @@ The optional private stack adds a fully anonymized search path:
 **Setup:**
 
 ```bash
+./scripts/prepare-searxng.sh
 docker compose -f docker-compose.yml -f examples/compose.private.yml up -d --build
 ```
 
@@ -342,8 +352,10 @@ Environment variables (set in `docker-compose.yml` or `.env`):
 | Variable | Default | Description |
 |---|---|---|
 | `SEARXNG_URL` | `http://searxng:8080` | SearXNG instance URL |
+| `SEARXNG_IMAGE` | pinned SearXNG digest | SearXNG container image; override only when intentionally upgrading |
 | `CACHE_TTL` | `3600` | Cache duration in seconds |
 | `RATE_LIMIT` | `60` | Max requests per minute |
+| `SQLITE_TIMEOUT` | `1.0` | SQLite lock wait timeout in seconds for query stats |
 | `AGENT_SEARCH_TOKEN` | *(empty)* | Bearer token for auth (optional) |
 | `ADAPTERS_DIR` | `/app/adapters` | Path to pluggable adapter modules |
 
@@ -352,6 +364,7 @@ Environment variables (set in `docker-compose.yml` or `.env`):
 - Search engines, news engines, rate limits, and failure modes depend on the connected SearXNG instance. `/engines` is the live source of truth.
 - Bearer auth is a simple local API gate, not a multi-user authorization system. Treat `AGENT_SEARCH_TOKEN` as a shared service token.
 - Rate limiting is in memory. It resets on restart and is per API process.
+- Query statistics use local SQLite with WAL and a bounded lock timeout. For high-volume multi-worker deployments, move query logging to an external database or telemetry backend.
 - Content extraction validates the starting URL and every redirect hop before fetching redirected content, but fetched third-party pages are still untrusted and are scrubbed before being returned.
 - Google Cache is unreliable because public cache availability changes frequently.
 - The Tor/private stack is intentionally slower than direct search.
