@@ -507,8 +507,11 @@ async def strategy_ua_rotation(client: httpx.AsyncClient, url: str) -> Optional[
 async def strategy_wayback(client: httpx.AsyncClient, url: str) -> Optional[str]:
     """Strategy 4: Wayback Machine via CDX API."""
     try:
-        cdx_url = f"https://web.archive.org/cdx/search/cdx?url={url}&output=json&limit=1&sort=reverse"
-        r = await client.get(cdx_url, timeout=FETCH_TIMEOUT)
+        r = await client.get(
+            "https://web.archive.org/cdx/search/cdx",
+            params={"url": url, "output": "json", "limit": "1", "sort": "reverse"},
+            timeout=FETCH_TIMEOUT,
+        )
         if r.is_success:
             data = r.json()
             if len(data) > 1:  # First row is headers

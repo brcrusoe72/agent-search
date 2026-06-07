@@ -4,8 +4,7 @@ import sqlite3
 import os
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
-from contextlib import asynccontextmanager
+from typing import Dict, List
 
 
 class QueryDatabase:
@@ -14,8 +13,15 @@ class QueryDatabase:
     def __init__(self, db_path: str | None = None):
         data_dir = Path(os.getenv("DATA_DIR", "data"))
         self.db_path = db_path or str(data_dir / "query_log.db")
+        self.timeout = float(os.getenv("SQLITE_TIMEOUT", "1.0"))
+        self.disabled = False
         self._ensure_data_dir()
         self._init_db()
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path, timeout=self.timeout)
+        conn.execute(f"PRAGMA busy_timeout = {int(self.timeout * 1000)}")
+        return conn
     
     def _ensure_data_dir(self):
         """Ensure the data directory exists."""
@@ -23,42 +29,66 @@ class QueryDatabase:
     
     def _init_db(self):
         """Initialize the database schema."""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS query_log (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    query TEXT NOT NULL,
-                    timestamp REAL NOT NULL,
-                    engine TEXT NOT NULL,
-                    result_count INTEGER NOT NULL,
-                    response_time_ms REAL
-                )
-            """)
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_query_timestamp 
-                ON query_log(query, timestamp)
-            """)
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_engine 
-                ON query_log(engine)
-            """)
-            conn.commit()
+        try:
+            with self._connect() as conn:
+                try:
+                    conn.execute("PRAGMA journal_mode = WAL")
+                except sqlite3.OperationalError:
+                    pass
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS query_log (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        query TEXT NOT NULL,
+                        timestamp REAL NOT NULL,
+                        engine TEXT NOT NULL,
+                        result_count INTEGER NOT NULL,
+                        response_time_ms REAL
+                    )
+                """)
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_query_timestamp
+                    ON query_log(query, timestamp)
+                """)
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_engine
+                    ON query_log(engine)
+                """)
+                conn.commit()
+        except sqlite3.OperationalError as exc:
+            if "readonly" in str(exc).lower():
+                self.disabled = True
+                return
+            raise
     
     async def log_query(self, query: str, engines: List[str], result_count: int, response_time_ms: float):
-        """Log a search query with results."""
+        """Log a search query with bounded SQLite lock waiting."""
+        if self.disabled:
+            return
         timestamp = time.time()
+        rows = [(query, timestamp, engine, result_count, response_time_ms) for engine in engines]
 
-        with sqlite3.connect(self.db_path) as conn:
-            for engine in engines:
-                conn.execute("""
+        try:
+            with self._connect() as conn:
+                conn.executemany("""
                     INSERT INTO query_log (query, timestamp, engine, result_count, response_time_ms)
                     VALUES (?, ?, ?, ?, ?)
-                """, (query, timestamp, engine, result_count, response_time_ms))
-            conn.commit()
+                """, rows)
+                conn.commit()
+        except sqlite3.OperationalError as exc:
+            if "readonly" in str(exc).lower():
+                self.disabled = True
+                return
+            raise
     
     async def get_stats(self) -> Dict:
         """Get query statistics."""
-        with sqlite3.connect(self.db_path) as conn:
+        if self.disabled:
+            return {
+                'total_queries': 0,
+                'queries_per_engine': {},
+                'avg_results_per_engine': {},
+            }
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
 
             # Total queries

@@ -7,7 +7,8 @@
 #   4. Network-level egress firewall (tor-internal has no internet route)
 #
 # Usage:
-#   docker compose -f docker-compose.yml -f compose.private.yml up -d --build
+#   ./scripts/prepare-searxng.sh
+#   docker compose -f docker-compose.yml -f examples/compose.private.yml up -d --build
 #
 # Result:
 #   :3939 = direct (fast)
@@ -54,11 +55,11 @@ services:
 
   # === Private SearXNG — all traffic through Tor ===
   searxng-private:
-    image: searxng/searxng:latest
+    image: ${SEARXNG_IMAGE:-searxng/searxng@sha256:4d7ed8b7035ecf827bd901ba6d32f5c32d8119bc09bb3cdafeb0ce58f1b951c1}
     container_name: agent-search-searxng-private
     volumes:
       - ./searxng:/etc/searxng:rw
-      - ./examples/settings.tor.yml:/etc/searxng/settings.yml:ro
+      - ./searxng/settings.tor.yml:/etc/searxng/settings.yml:ro
     environment:
       - SEARXNG_BASE_URL=http://searxng-private:8080/
     networks:

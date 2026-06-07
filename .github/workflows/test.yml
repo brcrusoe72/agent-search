@@ -17,7 +17,43 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pytest requests
+          pip install -r requirements.txt pytest requests build wheel
+          pip install -e sdk
+          pip install -e mcp-server
+
+      - name: Prepare local SearXNG config
+        run: ./scripts/prepare-searxng.sh
 
       - name: Run self-contained tests
         run: pytest tests -q
+
+      - name: Compile Python modules
+        run: python -m compileall app adapters mcp-server/agent_search_mcp scripts sdk -q
+
+      - name: Check CLI and package imports
+        run: |
+          python -m app.cli --help
+          python -m agent_search_mcp --help
+          python scripts/check_evolver.py --help
+          python - <<'PY'
+          from agentsearch import AgentSearch
+          from agent_search_mcp.server import make_server
+
+          assert AgentSearch is not None
+          assert make_server("http://localhost:3939") is not None
+          print("imports ok")
+          PY
+
+      - name: Build Python packages
+        run: |
+          python -m build --no-isolation --sdist --wheel --outdir /tmp/agentsearch-api-dist .
+          python -m build --no-isolation --sdist --wheel --outdir /tmp/agentsearch-sdk-dist sdk
+          python -m build --no-isolation --sdist --wheel --outdir /tmp/agentsearch-mcp-dist mcp-server
+
+      - name: Validate Compose configs
+        run: |
+          docker compose -f docker-compose.yml config --quiet
+          docker compose -f docker-compose.yml -f examples/compose.private.yml config --quiet
+
+      - name: Build Docker image
+        run: docker build -t agent-search-api:test .

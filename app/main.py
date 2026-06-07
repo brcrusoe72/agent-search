@@ -30,6 +30,7 @@ import asyncio
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import FastAPI, Query, HTTPException, Body
@@ -225,6 +226,27 @@ async def _query_searxng(
     return data.get("results", [])[:count * 3]
 
 
+def _normalize_domain_filter(value: str) -> str:
+    """Return a hostname from a domain filter value."""
+    raw = value.strip().lower().strip(".")
+    if not raw:
+        return ""
+    parsed = urlparse(raw if "://" in raw else f"//{raw}")
+    host = (parsed.hostname or raw).lower().strip(".")
+    return host
+
+
+def _result_hostname(url: str) -> str:
+    parsed = urlparse(url)
+    return (parsed.hostname or "").lower().strip(".")
+
+
+def _hostname_matches(hostname: str, domain: str) -> bool:
+    if not hostname or not domain:
+        return False
+    return hostname == domain or hostname.endswith(f".{domain}")
+
+
 # =========================================================================
 # SEARCH ENDPOINTS
 # =========================================================================
@@ -262,10 +284,15 @@ async def search(
     results = deduplicate_with_scoring(raw)
 
     if domain:
-        results = [r for r in results if domain.lower() in r.url.lower()]
+        include_domain = _normalize_domain_filter(domain)
+        results = [r for r in results if _hostname_matches(_result_hostname(r.url), include_domain)]
     if exclude_domains:
-        excluded = [d.strip().lower() for d in exclude_domains.split(",")]
-        results = [r for r in results if not any(d in r.url.lower() for d in excluded)]
+        excluded = [_normalize_domain_filter(d) for d in exclude_domains.split(",")]
+        excluded = [d for d in excluded if d]
+        results = [
+            r for r in results
+            if not any(_hostname_matches(_result_hostname(r.url), d) for d in excluded)
+        ]
 
     results = results[:count]
 
