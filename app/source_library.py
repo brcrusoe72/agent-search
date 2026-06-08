@@ -5,7 +5,6 @@ Bypasses search entirely for known high-value sources. When a query matches
 a topic, returns direct URLs to fetch rather than hoping SearXNG finds them.
 """
 
-import re
 from typing import List, Dict, Optional
 
 # Each entry: topic keywords -> list of known high-quality source URLs

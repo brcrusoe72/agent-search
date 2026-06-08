@@ -144,7 +144,7 @@ def detect_lookalike(domain: str) -> Optional[str]:
             return brand
 
         # Check for brand embedded with extra chars (e.g. "google-verify")
-        if brand in base and base != brand and len(base) - len(brand) <= 8:
+        if brand in base and len(base) - len(brand) <= 8:
             return brand
 
         # Check if brand-length prefix is a near-match (e.g. "g00gle-news" → "g00gle" vs "google")
