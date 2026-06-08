@@ -392,6 +392,14 @@ SEARXNG_URL=http://localhost:8080 uvicorn app.main:app --reload --port 3939
 pytest tests/
 ```
 
+## Release and GitHub governance
+
+- `Test` runs on every push and pull request.
+- `CodeQL` runs on push, pull request, and a weekly schedule.
+- Dependabot watches Python packages, Dockerfiles, and GitHub Actions.
+- Version releases are created from semantic tags such as `v2.0.1` or by manually running the `Release` workflow with a tag input.
+- Update [`CHANGELOG.md`](CHANGELOG.md) before creating a release tag.
+
 ## Contributing
 
 1. Fork → branch → commit → PR.

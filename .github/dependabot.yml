@@ -1,0 +1,68 @@
+version: 2
+
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "github-actions"]
+
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:15"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "python"]
+    groups:
+      python-runtime:
+        patterns: ["*"]
+
+  - package-ecosystem: "pip"
+    directory: "/sdk"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:30"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "python", "sdk"]
+
+  - package-ecosystem: "pip"
+    directory: "/mcp-server"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:45"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "python", "mcp"]
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "docker"]
+
+  - package-ecosystem: "docker"
+    directory: "/mcp-server"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:15"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "docker", "mcp"]
+
+  - package-ecosystem: "docker"
+    directory: "/examples/torproxy"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:30"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "docker", "private-stack"]
