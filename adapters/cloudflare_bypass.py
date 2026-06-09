@@ -13,6 +13,12 @@ from adapters.safe_fetch import safe_httpx_get
 
 logger = logging.getLogger(__name__)
 
+
+def _safe_log_value(value: object, limit: int = 200) -> str:
+    text = str(value).replace("\r", "\\r").replace("\n", "\\n")
+    return text[:limit]
+
+
 # Domains known to use aggressive Cloudflare protection
 CLOUDFLARE_DOMAINS = {
     "iiss.org",
@@ -92,7 +98,7 @@ async def extract(url: str, timeout: int = 30) -> Optional[Dict]:
                             "success": True,
                         }
         except Exception as e:
-            logger.debug(f"CF bypass attempt failed with UA {ua[:30]}: {e}")
+            logger.debug("CF bypass attempt failed with UA %s: %s", _safe_log_value(ua[:30]), e)
             continue
 
     # Strategy 2: Google Cache
@@ -107,7 +113,7 @@ async def extract(url: str, timeout: int = 30) -> Optional[Dict]:
                     "success": True,
                 }
     except Exception as e:
-        logger.debug(f"Google Cache fallback failed: {e}")
+        logger.debug("Google Cache fallback failed: %s", e)
 
     # Strategy 3: Wayback Machine
     try:
@@ -121,7 +127,7 @@ async def extract(url: str, timeout: int = 30) -> Optional[Dict]:
                     "success": True,
                 }
     except Exception as e:
-        logger.debug(f"Wayback fallback failed: {e}")
+        logger.debug("Wayback fallback failed: %s", e)
 
     return None
 

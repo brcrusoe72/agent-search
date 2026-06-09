@@ -13,7 +13,6 @@ Does NOT use LLM calls — pure data analysis.
 
 from __future__ import annotations
 
-import json
 import sqlite3
 import time
 from collections import defaultdict
@@ -28,6 +27,11 @@ logger = logging.getLogger("agentsearch.evolver")
 
 ADAPTERS_DIR = Path(os.getenv("ADAPTERS_DIR", "adapters"))
 DYNAMIC_BLOCKLIST_PATH = Path(os.getenv("DATA_DIR", "data")) / "blocked_domains.txt"
+
+
+def _safe_log_value(value: object, limit: int = 200) -> str:
+    text = str(value).replace("\r", "\\r").replace("\n", "\\n")
+    return text[:limit]
 
 
 class Evolver:
@@ -270,8 +274,8 @@ class Evolver:
                             for line in DYNAMIC_BLOCKLIST_PATH.read_text().splitlines()
                             if line.strip() and not line.startswith("#")
                         }
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Failed to read dynamic blocklist: %s", exc)
 
                 new_domains = [d for d in rec["domains"] if d.lower() not in existing]
                 if new_domains:
@@ -281,9 +285,10 @@ class Evolver:
                             for d in new_domains:
                                 f.write(f"{d}\n")
                         actions.append(f"Blocked {len(new_domains)} domains: {', '.join(new_domains)}")
-                        logger.info(f"Evolver auto-blocked domains: {new_domains}")
+                        safe_domains = [_safe_log_value(domain) for domain in new_domains]
+                        logger.info("Evolver auto-blocked domains: %s", safe_domains)
                     except Exception as e:
-                        logger.warning(f"Failed to write dynamic blocklist: {e}")
+                        logger.warning("Failed to write dynamic blocklist: %s", e)
 
         return actions
 

@@ -111,8 +111,8 @@ def _load_dynamic_blocklist() -> set[str]:
                 if line and not line.startswith("#"):
                     domains.add(line.lower())
             return domains
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to load dynamic blocklist: %s", exc)
     return set()
 
 
@@ -141,6 +141,21 @@ import logging
 logger = logging.getLogger("agentsearch.killchain")
 
 
+def _safe_log_value(value: object, limit: int = 200) -> str:
+    text = str(value).replace("\r", "\\r").replace("\n", "\\n")
+    return text[:limit]
+
+
+def _hostname(url: str) -> str:
+    return (urlparse(url).hostname or "").lower()
+
+
+def _host_matches(hostname: str, domain: str) -> bool:
+    hostname = hostname.lower().removeprefix("www.")
+    domain = domain.lower().removeprefix("www.")
+    return hostname == domain or hostname.endswith("." + domain)
+
+
 # ---------------------------------------------------------------------------
 # Security: SSRF Protection
 # ---------------------------------------------------------------------------
@@ -161,7 +176,7 @@ def is_safe_url(url: str, verbose: bool = False) -> bool:
 
     if parsed.scheme not in ("http", "https"):
         if verbose:
-            logger.warning(f"BLOCKED: non-HTTP scheme '{parsed.scheme}'")
+            logger.warning("BLOCKED: non-HTTP scheme '%s'", _safe_log_value(parsed.scheme))
         return False
 
     hostname = parsed.hostname
@@ -172,7 +187,7 @@ def is_safe_url(url: str, verbose: bool = False) -> bool:
 
     # Warn on plain HTTP (content could be tampered via MITM)
     if parsed.scheme == "http" and verbose:
-        logger.warning(f"DEGRADED: plain HTTP URL (no TLS) — {hostname}")
+        logger.warning("DEGRADED: plain HTTP URL (no TLS) - %s", _safe_log_value(hostname))
 
     hostname_lower = hostname.lower()
 
@@ -185,13 +200,13 @@ def is_safe_url(url: str, verbose: bool = False) -> bool:
     for blocked in all_blocked:
         if hostname_lower == blocked or hostname_lower.endswith("." + blocked):
             if verbose:
-                logger.warning(f"BLOCKED: blocked domain '{blocked}'")
+                logger.warning("BLOCKED: blocked domain '%s'", _safe_log_value(blocked))
             return False
 
     for tld in SUSPICIOUS_TLDS:
         if hostname_lower.endswith(tld):
             if verbose:
-                logger.warning(f"BLOCKED: suspicious TLD '{tld}'")
+                logger.warning("BLOCKED: suspicious TLD '%s'", _safe_log_value(tld))
             return False
 
     # IP address check — block private/reserved ranges
@@ -199,7 +214,7 @@ def is_safe_url(url: str, verbose: bool = False) -> bool:
         addr = ipaddress.ip_address(hostname)
         if addr.is_private or addr.is_reserved or addr.is_loopback or addr.is_link_local:
             if verbose:
-                logger.warning(f"BLOCKED: private/reserved IP {addr}")
+                logger.warning("BLOCKED: private/reserved IP %s", addr)
             return False
     except ValueError:
         # Not an IP literal — resolve DNS and check resolved IP
@@ -211,12 +226,21 @@ def is_safe_url(url: str, verbose: bool = False) -> bool:
                     addr = ipaddress.ip_address(ip_str)
                     if addr.is_private or addr.is_reserved or addr.is_loopback or addr.is_link_local:
                         if verbose:
-                            logger.warning(f"BLOCKED: '{hostname}' resolves to private IP {addr}")
+                            logger.warning(
+                                "BLOCKED: '%s' resolves to private IP %s",
+                                _safe_log_value(hostname),
+                                addr,
+                            )
                         return False
                 except ValueError:
                     continue
-        except (socket.gaierror, OSError):
-            pass
+        except (socket.gaierror, OSError) as exc:
+            if verbose:
+                logger.debug(
+                    "DNS resolution failed for '%s': %s",
+                    _safe_log_value(hostname),
+                    exc,
+                )
 
     return True
 
@@ -322,7 +346,8 @@ def is_paywalled(text: str) -> bool:
 
 
 def _is_youtube(url: str) -> bool:
-    return "youtube.com" in url or "youtu.be" in url
+    hostname = _hostname(url)
+    return _host_matches(hostname, "youtube.com") or _host_matches(hostname, "youtu.be")
 
 
 def _is_pdf_url(url: str) -> bool:
@@ -331,13 +356,13 @@ def _is_pdf_url(url: str) -> bool:
 
 def _is_medium(url: str) -> bool:
     """Check if URL is a Medium article."""
-    domain = urlparse(url).netloc.lower().replace("www.", "")
+    domain = _hostname(url)
     medium_domains = {
         "medium.com", "towardsdatascience.com", "betterprogramming.pub",
         "levelup.gitconnected.com", "javascript.plainenglish.io",
         "python.plainenglish.io", "blog.devgenius.io", "infosecwriteups.com",
     }
-    return domain in medium_domains or "medium.com" in domain
+    return any(_host_matches(domain, medium_domain) for medium_domain in medium_domains)
 
 
 def _load_medium_adapter():
@@ -351,7 +376,7 @@ def _load_medium_adapter():
         spec.loader.exec_module(mod)
         return getattr(mod, "fetch_content", None)
     except Exception as e:
-        logger.warning(f"Failed to load medium adapter: {e}")
+        logger.warning("Failed to load medium adapter: %s", e)
         return None
 
 
@@ -364,7 +389,7 @@ async def _strategy_medium(url: str) -> Optional[str]:
     try:
         return await loop.run_in_executor(None, adapter, url)
     except Exception as e:
-        logger.debug(f"Medium adapter failed: {e}")
+        logger.debug("Medium adapter failed: %s", e)
         return None
 
 
@@ -383,7 +408,7 @@ def _load_cloudflare_adapter():
         spec.loader.exec_module(mod)
         return mod  # returns module with can_handle() and extract()
     except Exception as e:
-        logger.warning(f"Failed to load cloudflare adapter: {e}")
+        logger.warning("Failed to load cloudflare adapter: %s", e)
         return None
 
 
@@ -394,7 +419,11 @@ async def _strategy_cloudflare(cf_mod, url: str) -> Optional[str]:
         if result and result.get("success") and result.get("content"):
             content = result["content"]
             strategy = result.get("strategy", "cloudflare-bypass")
-            logger.info(f"[{strategy}] Cloudflare bypass succeeded for {urlparse(url).netloc}")
+            logger.info(
+                "[%s] Cloudflare bypass succeeded for %s",
+                _safe_log_value(strategy),
+                _safe_log_value(_hostname(url)),
+            )
             # Parse HTML to text if needed
             if "<html" in content.lower()[:500]:
                 try:
@@ -403,11 +432,11 @@ async def _strategy_cloudflare(cf_mod, url: str) -> Optional[str]:
                     for tag in soup(["script", "style", "nav", "footer", "header"]):
                         tag.decompose()
                     content = soup.get_text(separator="\n", strip=True)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Cloudflare HTML cleanup failed: %s", exc)
             return content
     except Exception as e:
-        logger.debug(f"Cloudflare bypass failed: {e}")
+        logger.debug("Cloudflare bypass failed: %s", e)
     return None
 
 
@@ -422,7 +451,7 @@ def _load_adapter(name: str):
         spec.loader.exec_module(mod)
         return getattr(mod, "fetch_content", None)
     except Exception as e:
-        logger.warning(f"Failed to load adapter '{name}': {e}")
+        logger.warning("Failed to load adapter '%s': %s", _safe_log_value(name), e)
         return None
 
 
@@ -452,7 +481,8 @@ async def strategy_direct(client: httpx.AsyncClient, url: str, ua_index: int = 0
         if text and not is_paywalled(text):
             return text
         return None
-    except Exception:
+    except Exception as exc:
+        logger.debug("Direct strategy failed for %s: %s", _safe_log_value(_hostname(url)), exc)
         return None
 
 
@@ -491,7 +521,8 @@ async def strategy_readability(client: httpx.AsyncClient, url: str) -> Optional[
             if not is_paywalled(text):
                 return text[:MAX_CONTENT_CHARS]
         return None
-    except Exception:
+    except Exception as exc:
+        logger.debug("Readability strategy failed for %s: %s", _safe_log_value(_hostname(url)), exc)
         return None
 
 
@@ -528,7 +559,8 @@ async def strategy_wayback(client: httpx.AsyncClient, url: str) -> Optional[str]
                     if text:
                         return text
         return None
-    except Exception:
+    except Exception as exc:
+        logger.debug("Wayback strategy failed for %s: %s", _safe_log_value(_hostname(url)), exc)
         return None
 
 
@@ -573,7 +605,8 @@ async def strategy_google_cache(client: httpx.AsyncClient, url: str) -> Optional
             if text and len(text) >= MIN_USEFUL_CHARS:
                 return text[:MAX_CONTENT_CHARS]
         return None
-    except Exception:
+    except Exception as exc:
+        logger.debug("Google cache strategy failed for %s: %s", _safe_log_value(_hostname(url)), exc)
         return None
 
 
@@ -582,7 +615,7 @@ async def strategy_search_about(
 ) -> Optional[str]:
     """Strategy 6: Can't read the page? Search for coverage elsewhere."""
     try:
-        domain = urlparse(url).netloc
+        domain = _hostname(url)
         path = urlparse(url).path.strip("/").replace("/", " ")
         query = f"{domain} {path}"[:80]
 
@@ -597,13 +630,14 @@ async def strategy_search_about(
         results = r.json().get("results", [])
         for result in results[:3]:
             result_url = result.get("url", "")
-            result_domain = urlparse(result_url).netloc
+            result_domain = _hostname(result_url)
             if result_domain != domain and is_safe_url(result_url):
                 content = await strategy_direct(client, result_url)
                 if content:
                     return f"[Via coverage of {url}]\n\n{content}"
         return None
-    except Exception:
+    except Exception as exc:
+        logger.debug("Search-about strategy failed for %s: %s", _safe_log_value(_hostname(url)), exc)
         return None
 
 
@@ -615,8 +649,8 @@ def strategy_adapter_sync(url: str, obstacle_type: str) -> Optional[str]:
             result = adapter(url)
             if result and len(result) >= MIN_USEFUL_CHARS:
                 return result[:MAX_CONTENT_CHARS]
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Adapter '%s' failed for %s: %s", obstacle_type, _safe_log_value(_hostname(url)), exc)
     return None
 
 
@@ -670,7 +704,11 @@ def strategy_pdf_sync(url: str) -> Optional[str]:
         # Check Content-Length header first
         content_length = r.headers.get("Content-Length")
         if content_length and int(content_length) > MAX_PDF_BYTES:
-            logger.warning(f"PDF too large ({int(content_length)} bytes): {url}")
+            logger.warning(
+                "PDF too large (%s bytes): %s",
+                int(content_length),
+                _safe_log_value(url),
+            )
             return None
 
         # Download with running size check
@@ -679,7 +717,11 @@ def strategy_pdf_sync(url: str) -> Optional[str]:
         for chunk in r.iter_content(chunk_size=65536):
             total += len(chunk)
             if total > MAX_PDF_BYTES:
-                logger.warning(f"PDF exceeded {MAX_PDF_BYTES} bytes during download: {url}")
+                logger.warning(
+                    "PDF exceeded %s bytes during download: %s",
+                    MAX_PDF_BYTES,
+                    _safe_log_value(url),
+                )
                 return None
             chunks.append(chunk)
 
@@ -710,12 +752,12 @@ def strategy_pdf_sync(url: str) -> Optional[str]:
                 text = json.loads(result.stdout.strip())
                 return text[:MAX_CONTENT_CHARS] if len(text) >= MIN_USEFUL_CHARS else None
             else:
-                logger.debug(f"PDF subprocess failed: {result.stderr[:200]}")
+                logger.debug("PDF subprocess failed: %s", _safe_log_value(result.stderr[:200]))
                 return None
         finally:
             Path(tmp_path).unlink(missing_ok=True)
     except Exception as e:
-        logger.debug(f"PDF extraction failed: {e}")
+        logger.debug("PDF extraction failed: %s", e)
         return None
 
 
@@ -757,7 +799,8 @@ def strategy_youtube_sync(url: str) -> Optional[str]:
                 if len(transcript) >= MIN_USEFUL_CHARS:
                     return transcript[:MAX_CONTENT_CHARS]
         return None
-    except Exception:
+    except Exception as exc:
+        logger.debug("YouTube transcript extraction failed for %s: %s", _safe_log_value(url), exc)
         return None
 
 
@@ -829,7 +872,11 @@ async def kill_chain(
     _SAFE_TLDS = (".gov", ".edu", ".mil", ".int")
     _is_trusted_tld = any(trust.domain.endswith(t) for t in _SAFE_TLDS)
     if trust.lookalike_of and not _is_trusted_tld:
-        logger.warning(f"Blocked typosquat: {trust.domain} (lookalike of {trust.lookalike_of})")
+        logger.warning(
+            "Blocked typosquat: %s (lookalike of %s)",
+            _safe_log_value(trust.domain),
+            _safe_log_value(trust.lookalike_of),
+        )
         return KillChainResult(
             url=url, content=None, strategy=None, chars=0,
             cached=False, strategies_tried=[],
@@ -916,8 +963,8 @@ async def kill_chain(
         _cf_mod = _load_cloudflare_adapter()
         if _cf_mod and _cf_mod.can_handle(url):
             _cf_adapter = _cf_mod
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Cloudflare adapter detection failed for %s: %s", _safe_log_value(_hostname(url)), exc)
 
     # Web content: escalating strategies
     web_strategies = [
@@ -952,15 +999,18 @@ async def kill_chain(
                         if _cf_mod and _cf_mod.can_handle(url, content=content):
                             _cf_adapter = _cf_mod
                             # Insert CF strategy right after current position
-                            logger.info(f"Cloudflare challenge detected on {urlparse(url).netloc}, engaging bypass")
+                            logger.info(
+                                "Cloudflare challenge detected on %s, engaging bypass",
+                                _safe_log_value(_hostname(url)),
+                            )
                             cf_content = await _strategy_cloudflare(_cf_adapter, url)
                             if cf_content:
                                 content = cf_content
                                 name = "cloudflare-bypass"
                             else:
                                 continue  # Skip this challenge page
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("Cloudflare challenge handling failed: %s", exc)
 
                 # Check for accidental PDF content
                 if content.strip().startswith("%PDF"):
@@ -972,11 +1022,21 @@ async def kill_chain(
 
                 # Skip garbage — too short to be real content
                 if len(content.strip()) < MIN_USEFUL_CHARS:
-                    logger.debug(f"[{name}] Only {len(content.strip())} chars — below minimum, skipping")
+                    logger.debug(
+                        "[%s] Only %s chars - below minimum, skipping",
+                        _safe_log_value(name),
+                        len(content.strip()),
+                    )
                     continue
 
                 content = _tag_content(content)
-                logger.info(f"[{name}] {len(content):,} chars from {urlparse(url).netloc} [trust={trust.tier}]")
+                logger.info(
+                    "[%s] %s chars from %s [trust=%s]",
+                    _safe_log_value(name),
+                    f"{len(content):,}",
+                    _safe_log_value(_hostname(url)),
+                    _safe_log_value(trust.tier),
+                )
 
                 if content_cache:
                     await content_cache.set(url, content, name)
@@ -988,11 +1048,16 @@ async def kill_chain(
                     trust=trust,
                 )
         except Exception as e:
-            logger.debug(f"Strategy {name} failed for {url}: {e}")
+            logger.debug(
+                "Strategy %s failed for %s: %s",
+                _safe_log_value(name),
+                _safe_log_value(url),
+                e,
+            )
         finally:
             gc.collect()
 
-    logger.info(f"All strategies exhausted for {urlparse(url).netloc}")
+    logger.info("All strategies exhausted for %s", _safe_log_value(_hostname(url)))
     return KillChainResult(
         url=url, content=None, strategy=None, chars=0,
         cached=False, strategies_tried=strategies_tried,

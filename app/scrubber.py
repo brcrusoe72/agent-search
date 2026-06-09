@@ -302,8 +302,8 @@ class ContentScrubber:
                     ))
                     current = current.replace(frag, decoded)
                     layers += 1
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Base64 fragment decode failed: %s", exc)
 
         # URL encoding
         if '%' in current:
@@ -318,8 +318,8 @@ class ContentScrubber:
                     ))
                     current = decoded
                     layers += 1
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("URL decoding failed: %s", exc)
 
         # Flag recursive encoding
         if layers > 2:
@@ -345,8 +345,8 @@ class ContentScrubber:
                         evidence=f"Injection pattern: {pattern[:60]}",
                         location="content",
                     ))
-            except re.error:
-                pass
+            except re.error as exc:
+                logger.debug("Invalid injection pattern skipped: %s", exc)
         return threats
 
     def _detect_exfiltration(self, text: str) -> list[ThreatDetection]:
@@ -360,8 +360,8 @@ class ContentScrubber:
                         evidence=f"Exfiltration pattern: {pattern[:60]}",
                         location="content",
                     ))
-            except re.error:
-                pass
+            except re.error as exc:
+                logger.debug("Invalid exfiltration pattern skipped: %s", exc)
         return threats
 
     def _detect_impersonation(self, text: str) -> list[ThreatDetection]:
@@ -375,8 +375,8 @@ class ContentScrubber:
                         evidence=f"Impersonation pattern: {pattern[:60]}",
                         location="content",
                     ))
-            except re.error:
-                pass
+            except re.error as exc:
+                logger.debug("Invalid impersonation pattern skipped: %s", exc)
         return threats
 
     def _detect_xss(self, text: str) -> list[ThreatDetection]:
@@ -390,8 +390,8 @@ class ContentScrubber:
                         evidence=f"XSS pattern: {pattern[:60]}",
                         location="content",
                     ))
-            except re.error:
-                pass
+            except re.error as exc:
+                logger.debug("Invalid XSS pattern skipped: %s", exc)
         return threats
 
     # --- Stage 3: Semantic Analysis ---
