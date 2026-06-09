@@ -605,8 +605,6 @@ async def read_url(
     adapters, PDF extraction, and YouTube transcripts.
     """
     assert http_client is not None
-    start = time.time()
-
     result = await kill_chain(
         http_client,
         url,

@@ -15,9 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
-from typing import Optional
-from urllib.parse import urlparse, quote
+from urllib.parse import urlparse
 
 import httpx
 
@@ -547,7 +545,6 @@ async def trace_sources(
             results = resp.json().get("results", [])
 
             # Filter to known institution domains
-            known_domains = {i["domain"] for i in INSTITUTIONS}
             filtered = []
             for r in results:
                 url = r.get("url", "")
