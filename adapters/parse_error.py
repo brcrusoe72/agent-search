@@ -1,8 +1,13 @@
 """Adapter for pages with malformed HTML that crash standard parsers."""
 
+import logging
 import re
 
+from bs4 import BeautifulSoup
+
 from adapters.safe_fetch import safe_requests_get
+
+logger = logging.getLogger("agentsearch.adapters.parse_error")
 
 MIN_CHARS = 300
 MAX_CHARS = 15000
@@ -19,13 +24,10 @@ def fetch_content(url: str) -> str | None:
         if not r.ok:
             return None
 
-        text = r.text
-
-        # Strip all HTML tags via regex (last resort)
-        text = re.sub(r"<script[^>]*>.*?</script>", "", text, flags=re.DOTALL | re.IGNORECASE)
-        text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL | re.IGNORECASE)
-        text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
-        text = re.sub(r"<[^>]+>", " ", text)
+        soup = BeautifulSoup(r.text, "html.parser")
+        for tag in soup(["script", "style"]):
+            tag.decompose()
+        text = soup.get_text(separator=" ", strip=True)
 
         # Clean whitespace
         text = re.sub(r"\s+", " ", text).strip()
@@ -35,5 +37,6 @@ def fetch_content(url: str) -> str | None:
             return text[:MAX_CHARS]
 
         return None
-    except Exception:
+    except Exception as exc:
+        logger.debug("Parse-error adapter failed: %s", exc)
         return None

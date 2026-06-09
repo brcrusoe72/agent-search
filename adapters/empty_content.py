@@ -3,9 +3,13 @@
 Uses readability-style scoring to find the real content block.
 """
 
+import logging
+
 from bs4 import BeautifulSoup
 
 from adapters.safe_fetch import safe_requests_get
+
+logger = logging.getLogger("agentsearch.adapters.empty_content")
 
 MIN_CHARS = 300
 MAX_CHARS = 15000
@@ -26,7 +30,8 @@ def fetch_content(url: str) -> str | None:
         for parser in ["html.parser", "lxml", "html5lib"]:
             try:
                 soup = BeautifulSoup(r.text, parser)
-            except Exception:
+            except Exception as exc:
+                logger.debug("Parser %s failed: %s", parser, exc)
                 continue
 
             for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
@@ -47,5 +52,6 @@ def fetch_content(url: str) -> str | None:
                 return candidates[0][1][:MAX_CHARS]
 
         return None
-    except Exception:
+    except Exception as exc:
+        logger.debug("Empty-content adapter failed: %s", exc)
         return None

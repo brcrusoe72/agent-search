@@ -19,6 +19,7 @@ from app import killchain
 from app import main
 from app.cache import Cache
 from app.database import QueryDatabase
+from adapters import medium as medium_adapter
 from adapters.safe_fetch import safe_requests_get
 
 
@@ -255,6 +256,24 @@ def test_plain_http_url_safety_check_does_not_crash(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(killchain.socket, "getaddrinfo", fake_getaddrinfo)
 
     assert killchain.is_safe_url("http://example.com/page", verbose=True) is True
+
+
+def test_content_type_helpers_match_hostnames_not_substrings() -> None:
+    assert medium_adapter.can_handle("https://medium.com/@user/story")
+    assert medium_adapter.can_handle("https://team.medium.com/story")
+    assert medium_adapter.can_handle("https://towardsdatascience.com/story")
+    assert not medium_adapter.can_handle("https://notmedium.com/story")
+    assert not medium_adapter.can_handle("https://medium.com.evil.example/story")
+
+    assert killchain._is_medium("https://medium.com/@user/story")
+    assert killchain._is_medium("https://team.medium.com/story")
+    assert not killchain._is_medium("https://notmedium.com/story")
+    assert not killchain._is_medium("https://medium.com.evil.example/story")
+
+    assert killchain._is_youtube("https://www.youtube.com/watch?v=1")
+    assert killchain._is_youtube("https://youtu.be/video")
+    assert not killchain._is_youtube("https://notyoutube.com/watch")
+    assert not killchain._is_youtube("https://youtube.com.evil.example/watch")
 
 
 def test_direct_strategy_blocks_unsafe_redirect_before_following(monkeypatch: pytest.MonkeyPatch) -> None:

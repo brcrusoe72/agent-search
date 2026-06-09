@@ -34,16 +34,16 @@ from typing import AsyncGenerator
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import FastAPI, Query, HTTPException, Body
+from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.cache import Cache
 from app.content_cache import ContentCache
-from app.dedup import deduplicate, deduplicate_with_scoring
+from app.dedup import deduplicate_with_scoring
 from app.killchain import kill_chain, kill_chain_batch
 from app.query_expansion import generate_query_variations
 from app.evolver import Evolver
-from app.source_tracer import trace_sources, find_institutions, get_institution_registry
+from app.source_tracer import trace_sources, get_institution_registry
 from app.database import query_db
 from app.models import (
     AdaptReportRequest,
@@ -79,6 +79,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("agentsearch")
 
+
+def _safe_log_value(value: object, limit: int = 200) -> str:
+    text = str(value).replace("\r", "\\r").replace("\n", "\\n")
+    return text[:limit]
+
+
 cache = Cache(ttl=CACHE_TTL)
 content_cache: ContentCache | None = None
 evolver: Evolver | None = None
@@ -105,9 +111,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 assert content_cache is not None
                 count = await content_cache.evict_expired()
                 if count > 0:
-                    logger.info(f"Evicted {count} expired cache entries")
-            except Exception:
-                pass
+                    logger.info("Evicted %s expired cache entries", count)
+            except Exception as exc:
+                logger.debug("Cache eviction failed: %s", exc)
 
     evict_task = asyncio.create_task(_evict_loop())
 
@@ -168,7 +174,13 @@ async def rate_limit_middleware(request, call_next):
 
     path = request.url.path
     query = str(request.query_params) if request.query_params else ""
-    logger.info(f"{client_ip} {request.method} {path} {query}")
+    logger.info(
+        "%s %s %s %s",
+        _safe_log_value(client_ip),
+        _safe_log_value(request.method),
+        _safe_log_value(path),
+        _safe_log_value(query),
+    )
 
     # Skip rate limiting for health check
     if path == "/health":
@@ -177,7 +189,7 @@ async def rate_limit_middleware(request, call_next):
     # Global circuit breaker — protect SearXNG and external sources
     _global_timestamps = [t for t in _global_timestamps if now - t < 60]
     if len(_global_timestamps) >= _GLOBAL_RATE_LIMIT:
-        logger.warning(f"GLOBAL rate limit hit ({_GLOBAL_RATE_LIMIT}/min)")
+        logger.warning("GLOBAL rate limit hit (%s/min)", _GLOBAL_RATE_LIMIT)
         from fastapi.responses import JSONResponse
         return JSONResponse(
             status_code=429,
@@ -197,7 +209,7 @@ async def rate_limit_middleware(request, call_next):
 
     _rate_store[client_ip] = [t for t in _rate_store[client_ip] if now - t < 60]
     if len(_rate_store[client_ip]) >= RATE_LIMIT_RPM:
-        logger.warning(f"Rate limited: {client_ip}")
+        logger.warning("Rate limited: %s", _safe_log_value(client_ip))
         from fastapi.responses import JSONResponse
         return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"})
     _rate_store[client_ip].append(now)

@@ -8,10 +8,14 @@ Medium blocks scrapers and paywalls most content. This adapter tries:
 4. RSS/feed version via 12ft.io-style approach
 """
 
+import logging
+
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, quote
 
 from adapters.safe_fetch import safe_requests_get
+
+logger = logging.getLogger("agentsearch.adapters.medium")
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
@@ -38,7 +42,7 @@ def can_handle(url: str) -> bool:
     if domain in MEDIUM_DOMAINS:
         return True
     # Check for medium.com subdomains
-    if "medium.com" in domain:
+    if domain.endswith(".medium.com"):
         return True
     return False
 
@@ -94,8 +98,8 @@ def fetch_content(url: str) -> str | None:
             text = _extract_article(r.text)
             if text:
                 return text
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Freedium strategy failed: %s", exc)
 
     # Strategy 2: Google cache
     try:
@@ -105,8 +109,8 @@ def fetch_content(url: str) -> str | None:
             text = _extract_article(r.text)
             if text:
                 return text
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Google cache strategy failed: %s", exc)
 
     # Strategy 3: archive.org latest
     try:
@@ -122,8 +126,8 @@ def fetch_content(url: str) -> str | None:
                     text = _extract_article(r2.text)
                     if text:
                         return text
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Archive.org strategy failed: %s", exc)
 
     # Strategy 4: Direct with Googlebot UA (Medium sometimes allows this)
     try:
@@ -136,7 +140,7 @@ def fetch_content(url: str) -> str | None:
             text = _extract_article(r.text)
             if text:
                 return text
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Googlebot strategy failed: %s", exc)
 
     return None
