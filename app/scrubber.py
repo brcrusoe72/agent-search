@@ -481,7 +481,6 @@ class ContentScrubber:
 
         redactions = 0
         cleaned = text
-        threat_types = {t.threat_type for t in threats}
 
         # High risk: prefix warning, truncate if extreme
         if risk_score > 0.8:
