@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote_plus, urlencode, urljoin
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .models import (
@@ -114,7 +114,7 @@ class AgentSearch:
                 try:
                     detail = resp.json().get("detail")
                 except Exception:
-                    pass
+                    detail = None
                 raise AgentSearchError(
                     f"HTTP {resp.status_code}: {detail or resp.text[:200]}",
                     status_code=resp.status_code,
@@ -138,7 +138,7 @@ class AgentSearch:
                 body = json.loads(e.read())
                 detail = body.get("detail")
             except Exception:
-                pass
+                detail = None
             raise AgentSearchError(
                 f"HTTP {e.code}: {detail or str(e)}",
                 status_code=e.code,
@@ -156,7 +156,7 @@ class AgentSearch:
                 try:
                     detail = resp.json().get("detail")
                 except Exception:
-                    pass
+                    detail = None
                 raise AgentSearchError(
                     f"HTTP {resp.status_code}: {detail or resp.text[:200]}",
                     status_code=resp.status_code,
@@ -180,7 +180,7 @@ class AgentSearch:
                 body_resp = json.loads(e.read())
                 detail = body_resp.get("detail")
             except Exception:
-                pass
+                detail = None
             raise AgentSearchError(
                 f"HTTP {e.code}: {detail or str(e)}",
                 status_code=e.code,

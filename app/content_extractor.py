@@ -8,7 +8,6 @@ This module now wraps its output through the scrubber to prevent any future
 caller from bypassing content security.
 """
 
-import re
 import asyncio
 from typing import Optional
 import httpx
@@ -19,6 +18,11 @@ from app.scrubber import scrub_content
 
 import logging
 logger = logging.getLogger("agentsearch.content_extractor")
+
+
+def _safe_log_value(value: object, limit: int = 200) -> str:
+    text = str(value).replace("\r", "\\r").replace("\n", "\\n")
+    return text[:limit]
 
 
 def extract_readable_text(html: str) -> str:
@@ -61,7 +65,8 @@ def extract_readable_text(html: str) -> str:
             )
         return result.content
         
-    except Exception:
+    except Exception as exc:
+        logger.debug("Readable text extraction failed: %s", exc)
         return ""
 
 
@@ -70,7 +75,10 @@ async def fetch_page_content(client: httpx.AsyncClient, url: str) -> Optional[st
     
     ⚠️  DEPRECATED: Use killchain.kill_chain() instead.
     """
-    logger.warning(f"DEPRECATED: fetch_page_content called for {url}. Use kill_chain() instead.")
+    logger.warning(
+        "DEPRECATED: fetch_page_content called for %s. Use kill_chain() instead.",
+        _safe_log_value(url),
+    )
     try:
         response = await _safe_get(
             client,
@@ -86,8 +94,8 @@ async def fetch_page_content(client: httpx.AsyncClient, url: str) -> Optional[st
             if 'text/html' in content_type:
                 return extract_readable_text(response.text)
                 
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Deprecated fetch_page_content failed: %s", exc)
     
     return None
 
@@ -97,7 +105,7 @@ async def fetch_multiple_contents(client: httpx.AsyncClient, urls: list[str]) ->
     
     ⚠️  DEPRECATED: Use killchain.kill_chain_batch() instead.
     """
-    logger.warning(f"DEPRECATED: fetch_multiple_contents called. Use kill_chain_batch() instead.")
+    logger.warning("DEPRECATED: fetch_multiple_contents called. Use kill_chain_batch() instead.")
     if not urls:
         return {}
     

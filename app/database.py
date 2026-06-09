@@ -3,8 +3,11 @@
 import sqlite3
 import os
 import time
+import logging
 from pathlib import Path
 from typing import Dict, List
+
+logger = logging.getLogger("agentsearch.database")
 
 
 class QueryDatabase:
@@ -33,8 +36,8 @@ class QueryDatabase:
             with self._connect() as conn:
                 try:
                     conn.execute("PRAGMA journal_mode = WAL")
-                except sqlite3.OperationalError:
-                    pass
+                except sqlite3.OperationalError as exc:
+                    logger.debug("SQLite WAL mode unavailable: %s", exc)
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS query_log (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,

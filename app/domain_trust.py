@@ -24,13 +24,17 @@ Trust tiers:
 from __future__ import annotations
 
 import logging
-import time
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import Optional
 from urllib.parse import urlparse
 
 logger = logging.getLogger("agentsearch.domain_trust")
+
+
+def _safe_log_value(value: object, limit: int = 200) -> str:
+    text = str(value).replace("\r", "\\r").replace("\n", "\\n")
+    return text[:limit]
+
 
 # ---------------------------------------------------------------------------
 # Known-Good Domains (authoritative sources)
@@ -181,7 +185,7 @@ def _get_domain_age_days(domain: str) -> Optional[int]:
             _whois_cache[domain] = age
             return age
     except Exception as e:
-        logger.debug(f"WHOIS lookup failed for {domain}: {e}")
+        logger.debug("WHOIS lookup failed for %s: %s", _safe_log_value(domain), e)
 
     _whois_cache[domain] = None
     return None

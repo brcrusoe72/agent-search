@@ -22,6 +22,11 @@ import httpx
 logger = logging.getLogger("agentsearch.source_tracer")
 
 
+def _safe_log_value(value: object, limit: int = 200) -> str:
+    text = str(value).replace("\r", "\\r").replace("\n", "\\n")
+    return text[:limit]
+
+
 # ---------------------------------------------------------------------------
 # Institution Registry
 # ---------------------------------------------------------------------------
@@ -526,7 +531,7 @@ async def trace_sources(
                 for r in results[:5]
             ]
         except Exception as e:
-            logger.debug(f"Search failed for {inst['id']}: {e}")
+            logger.debug("Search failed for %s: %s", _safe_log_value(inst["id"]), e)
             return []
 
     # Also do a broad search limited to all primary-source domains
