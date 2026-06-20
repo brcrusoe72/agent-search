@@ -84,6 +84,17 @@ KNOWN_BRANDS = [
     "wellsfargo", "bankofamerica", "linkedin", "openai", "anthropic",
 ]
 
+# Legitimate hosting platforms that serve user/project pages on subdomains.
+# These are not impersonation risks in themselves, and per-subdomain WHOIS is
+# meaningless (the registrable domain is the platform, not the user), so we give
+# them a standard floor and skip the age check. Brand/typosquat detection still
+# runs on the subdomain, so an actual impersonation (e.g. "netflixx.github.io")
+# is still caught.
+PLATFORM_DOMAINS = {
+    "github.io", "gitlab.io", "pages.dev", "netlify.app", "vercel.app",
+    "readthedocs.io", "gitbook.io", "sourceforge.net",
+}
+
 
 # ---------------------------------------------------------------------------
 # Trust Result
@@ -151,12 +162,18 @@ def detect_lookalike(domain: str) -> Optional[str]:
         if brand in base and len(base) - len(brand) <= 8:
             return brand
 
-        # Check if brand-length prefix is a near-match (e.g. "g00gle-news" → "g00gle" vs "google")
-        if len(base_clean) > len(brand):
-            prefix = base_clean[:len(brand)]
-            prefix_dist = _levenshtein(prefix, brand)
-            if 0 < prefix_dist <= threshold:
-                return brand
+        # Check if a brand-length prefix is a near-match (e.g. "g00gle-news" → "g00gle" vs "google").
+        # Guard against the "brc" vs "bbc" false positive: a long, unrelated label must not match a
+        # short brand just because its first few characters happen to be close. Only run this when the
+        # brand is distinctive enough AND the label is either marginally longer than the brand or
+        # splits the brand off with a separator — the actual shapes a typosquat takes.
+        if len(brand) >= 4 and len(base_clean) > len(brand):
+            looks_like_squat = ("-" in base) or ("_" in base) or (len(base_clean) - len(brand) <= 2)
+            if looks_like_squat:
+                prefix = base_clean[:len(brand)]
+                prefix_dist = _levenshtein(prefix, brand)
+                if 0 < prefix_dist <= threshold:
+                    return brand
 
     return None
 
@@ -239,6 +256,13 @@ def evaluate_trust(url: str, check_whois: bool = True) -> TrustResult:
             score = min(score, 0.2)
             break
 
+    # 3b. Known hosting platforms (GitHub Pages, etc.) — legitimate, but per-subdomain
+    #     WHOIS is pointless. Give a standard floor and skip the age lookup below.
+    is_platform = any(domain == d or domain.endswith("." + d) for d in PLATFORM_DOMAINS)
+    if is_platform:
+        reasons.append("Hosted on known platform")
+        score = max(score, 0.6)
+
     # 4. HTTPS check
     if is_https:
         reasons.append("HTTPS")
@@ -260,7 +284,7 @@ def evaluate_trust(url: str, check_whois: bool = True) -> TrustResult:
 
     # 6. Domain age (optional, slow)
     age_days = None
-    if check_whois and score < 0.9:  # Don't bother for known-good
+    if check_whois and score < 0.9 and not is_platform:  # Skip for known-good and platform hosts
         age_days = _get_domain_age_days(domain)
         if age_days is not None:
             if age_days < 30:
