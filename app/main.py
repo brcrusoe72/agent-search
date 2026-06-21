@@ -4,6 +4,7 @@ Search, read, extract, and adapt. One API for all information needs.
 
 Endpoints:
   /search          — Multi-engine web search (deduplicated, scored)
+  /search/strategy — Named engine strategy search
   /search/extract  — Search + extract content via kill chain
   /search/deep     — Multi-query fusion search
   /search/jobs     — Job board search
@@ -32,7 +33,7 @@ from collections import defaultdict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import AsyncGenerator
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from fastapi import FastAPI, Query, HTTPException
@@ -261,6 +262,41 @@ class EngineSelection:
     engines: list[EngineDescriptor]
 
 
+@dataclass(frozen=True)
+class SearchStrategyPack:
+    """A validated group of engines SearXNG should query together."""
+
+    engines: tuple[str, ...] = ()
+    categories: str | None = None
+    source: str = "searxng"
+    label: str | None = None
+
+
+SEARCH_STRATEGY_MODES: dict[str, tuple[SearchStrategyPack, ...]] = {
+    "general": (
+        SearchStrategyPack(("bing",)),
+        SearchStrategyPack(("duckduckgo", "brave", "google", "startpage")),
+    ),
+    "code": (
+        SearchStrategyPack(("github",)),
+        SearchStrategyPack(source="mdn", label="mdn"),
+        SearchStrategyPack(("docker hub",)),
+    ),
+    "academic": (
+        SearchStrategyPack(("arxiv", "crossref", "openalex", "semantic scholar")),
+    ),
+    "news": (
+        SearchStrategyPack(("reuters", "yahoo news", "bing news")),
+    ),
+    "private": (
+        SearchStrategyPack(("github",)),
+        SearchStrategyPack(source="mdn", label="mdn"),
+        SearchStrategyPack(("docker hub",)),
+        SearchStrategyPack(("arxiv", "crossref", "semantic scholar")),
+    ),
+}
+
+
 def _append_unique(values: list[str], value: object) -> None:
     text = _safe_log_value(value, limit=500).strip()
     if text and text not in values:
@@ -465,6 +501,50 @@ async def _query_searxng(
     )
 
 
+async def _query_mdn(query: str, count: int = 10) -> SearxngQueryResponse:
+    """Query MDN's search endpoint and shape results like SearXNG rows."""
+    assert http_client is not None
+    try:
+        resp = await http_client.get(
+            "https://developer.mozilla.org/api/v1/search",
+            params={"q": query, "locale": "en-US"},
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        return SearxngQueryResponse(
+            results=[],
+            upstream_status="error",
+            upstream_errors=[f"mdn: {_safe_log_value(exc)}"],
+        )
+
+    documents = data.get("documents") or data.get("results") or []
+    if not isinstance(documents, list):
+        documents = []
+
+    results: list[dict] = []
+    for item in documents[: count * 3]:
+        if not isinstance(item, dict):
+            continue
+        raw_url = item.get("mdn_url") or item.get("url") or item.get("path") or item.get("slug")
+        if not raw_url:
+            continue
+        url = str(raw_url)
+        if url.startswith("/"):
+            url = urljoin("https://developer.mozilla.org", url)
+        elif not url.startswith(("http://", "https://")):
+            url = urljoin("https://developer.mozilla.org/en-US/docs/", url)
+        results.append({
+            "title": item.get("title") or item.get("slug") or url,
+            "url": url,
+            "content": item.get("summary") or item.get("excerpt") or item.get("description") or "",
+            "engines": ["mdn"],
+        })
+
+    return SearxngQueryResponse(results=results)
+
+
 def _normalize_domain_filter(value: str) -> str:
     """Return a hostname from a domain filter value."""
     raw = value.strip().lower().strip(".")
@@ -493,6 +573,180 @@ def _domain_scoped_query(query: str, domain: str) -> str:
     return f"{site_clause} {query}"
 
 
+def _normalize_search_mode(mode: str) -> str:
+    normalized = mode.strip().lower()
+    if normalized not in SEARCH_STRATEGY_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Unknown search strategy mode",
+                "mode": mode,
+                "available_modes": sorted(SEARCH_STRATEGY_MODES),
+            },
+        )
+    return normalized
+
+
+def _filter_search_results(
+    results: list[SearchResult],
+    domain: str | None = None,
+    exclude_domains: str | None = None,
+) -> list[SearchResult]:
+    if domain:
+        include_domain = _normalize_domain_filter(domain)
+        results = [r for r in results if _hostname_matches(_result_hostname(r.url), include_domain)]
+    if exclude_domains:
+        excluded = [_normalize_domain_filter(d) for d in exclude_domains.split(",")]
+        excluded = [d for d in excluded if d]
+        results = [
+            r for r in results
+            if not any(_hostname_matches(_result_hostname(r.url), d) for d in excluded)
+        ]
+    return results
+
+
+async def _attach_content(results: list[SearchResult]) -> None:
+    if not results:
+        return
+    assert http_client is not None
+    kc_results = await kill_chain_batch(
+        http_client,
+        [r.url for r in results],
+        searxng_url=SEARXNG_URL,
+        content_cache=content_cache,
+        max_concurrent=5,
+    )
+    for result, kc in zip(results, kc_results):
+        result.content = kc.content
+        if content_cache:
+            await content_cache.log_fetch(
+                kc.url, kc.strategy, kc.success, kc.chars,
+                kc.strategies_tried, kc.error,
+            )
+
+
+async def _search_strategy_impl(
+    q: str,
+    count: int,
+    mode: str,
+    domain: str | None = None,
+    exclude_domains: str | None = None,
+    fetch: bool = False,
+) -> SearchResponse:
+    """Run a named strategy without silently falling through to default engines."""
+    start = time.time()
+
+    if not q or not q.strip():
+        raise HTTPException(status_code=400, detail="Query parameter 'q' cannot be empty")
+    if len(q) > 500:
+        raise HTTPException(status_code=400, detail="Query too long (max 500 chars)")
+
+    normalized_mode = _normalize_search_mode(mode)
+    cache_domain = domain or ""
+    cache_exclude_domains = exclude_domains or ""
+    cache_engines = f"mode:{normalized_mode}"
+    cached_resp = cache.get(q, cache_engines, count, cache_domain, cache_exclude_domains, fetch)
+    if cached_resp is not None:
+        cached_resp.meta.cached = True
+        cached_resp.meta.response_time_ms = round((time.time() - start) * 1000, 1)
+        return cached_resp
+
+    combined_raw: list[dict] = []
+    upstream_responses: list[SearxngQueryResponse] = []
+    engine_attempts: list[dict] = []
+    queries_used: list[str] = []
+    fallback_reason: str | None = None
+
+    for index, pack in enumerate(SEARCH_STRATEGY_MODES[normalized_mode]):
+        engine_selection = await _resolve_engine_selection(",".join(pack.engines)) if pack.engines else None
+        query_text = q
+        if domain and pack.source == "searxng":
+            include_domain = _normalize_domain_filter(domain)
+            if include_domain and _supports_site_search(engine_selection):
+                query_text = _domain_scoped_query(q, include_domain)
+        if query_text != q:
+            _append_unique(queries_used, query_text)
+
+        if pack.source == "mdn":
+            upstream = await _query_mdn(query_text, count * 2)
+        else:
+            if engine_selection is None:
+                raise HTTPException(status_code=500, detail=f"Strategy pack '{pack.label or pack.source}' has no engines")
+            try:
+                upstream = await _query_searxng(
+                    query_text,
+                    count * 2,
+                    engine_selection.value,
+                    categories=pack.categories,
+                )
+            except httpx.HTTPError as exc:
+                upstream = _upstream_error_response(exc)
+
+        upstream_responses.append(upstream)
+        combined_raw.extend(upstream.results)
+        current_results = _filter_search_results(
+            deduplicate_with_scoring(combined_raw),
+            domain=domain,
+            exclude_domains=exclude_domains,
+        )
+        engine_names = (
+            [engine.name for engine in engine_selection.engines]
+            if engine_selection
+            else [pack.label or pack.source]
+        )
+        engine_attempts.append({
+            "mode": normalized_mode,
+            "source": pack.source,
+            "engines": engine_names,
+            "engine_query": engine_selection.value if engine_selection else None,
+            "categories": pack.categories,
+            "query": query_text,
+            "raw_results": len(upstream.results),
+            "combined_total": len(current_results),
+            "upstream_status": upstream.upstream_status,
+            "upstream_errors": upstream.upstream_errors or [],
+            "unresponsive_engines": upstream.unresponsive_engines or [],
+        })
+
+        if normalized_mode == "general" and len(current_results) >= count:
+            break
+        if normalized_mode == "general" and index < len(SEARCH_STRATEGY_MODES[normalized_mode]) - 1:
+            fallback_reason = "no_results" if not upstream.results else "insufficient_results"
+
+    results = _filter_search_results(
+        deduplicate_with_scoring(combined_raw),
+        domain=domain,
+        exclude_domains=exclude_domains,
+    )[:count]
+
+    if fetch:
+        await _attach_content(results)
+
+    engines_used = list({e for r in results for e in r.engines})
+    elapsed = round((time.time() - start) * 1000, 1)
+
+    await query_db.log_query(f"{q} mode:{normalized_mode}", engines_used, len(results), elapsed)
+
+    response = SearchResponse(
+        results=results,
+        meta=SearchMeta(
+            query=q,
+            total=len(results),
+            engines_used=engines_used,
+            cached=False,
+            response_time_ms=elapsed,
+            queries_used=queries_used or None,
+            mode=normalized_mode,
+            engine_attempts=engine_attempts,
+            fallback_reason=fallback_reason,
+            **_upstream_metadata(*upstream_responses),
+        ),
+    )
+
+    cache.set(q, cache_engines, count, response, cache_domain, cache_exclude_domains, fetch)
+    return response
+
+
 # =========================================================================
 # SEARCH ENDPOINTS
 # =========================================================================
@@ -502,12 +756,25 @@ async def search(
     q: str = Query(..., description="Search query"),
     count: int = Query(10, ge=1, le=50, description="Number of results"),
     engines: str | None = Query(None, description="Comma-separated engine names"),
+    mode: str | None = Query(None, description="Named strategy: general, code, academic, news, or private"),
     domain: str | None = Query(None, description="Filter results to this domain"),
     exclude_domains: str | None = Query(None, description="Comma-separated domains to exclude"),
     fetch: bool = Query(False, description="Fetch page content via kill chain"),
 ) -> SearchResponse:
     """Search the web and return deduplicated, scored results."""
     start = time.time()
+
+    if mode:
+        if engines:
+            raise HTTPException(status_code=400, detail="Use either 'mode' or 'engines', not both")
+        return await _search_strategy_impl(
+            q=q,
+            count=count,
+            mode=mode,
+            domain=domain,
+            exclude_domains=exclude_domains,
+            fetch=fetch,
+        )
 
     if not q or not q.strip():
         raise HTTPException(status_code=400, detail="Query parameter 'q' cannot be empty")
@@ -536,38 +803,11 @@ async def search(
         raise HTTPException(status_code=502, detail=f"SearXNG error: {e}")
 
     results = deduplicate_with_scoring(upstream.results)
-
-    if domain:
-        include_domain = _normalize_domain_filter(domain)
-        results = [r for r in results if _hostname_matches(_result_hostname(r.url), include_domain)]
-    if exclude_domains:
-        excluded = [_normalize_domain_filter(d) for d in exclude_domains.split(",")]
-        excluded = [d for d in excluded if d]
-        results = [
-            r for r in results
-            if not any(_hostname_matches(_result_hostname(r.url), d) for d in excluded)
-        ]
-
-    results = results[:count]
+    results = _filter_search_results(results, domain=domain, exclude_domains=exclude_domains)[:count]
 
     # Fetch content via kill chain if requested
     if fetch and results:
-        assert http_client is not None
-        kc_results = await kill_chain_batch(
-            http_client,
-            [r.url for r in results],
-            searxng_url=SEARXNG_URL,
-            content_cache=content_cache,
-            max_concurrent=5,
-        )
-        for result, kc in zip(results, kc_results):
-            result.content = kc.content
-            # Log each fetch
-            if content_cache:
-                await content_cache.log_fetch(
-                    kc.url, kc.strategy, kc.success, kc.chars,
-                    kc.strategies_tried, kc.error,
-                )
+        await _attach_content(results)
 
     engines_used = list({e for r in results for e in r.engines})
     elapsed = round((time.time() - start) * 1000, 1)
@@ -591,14 +831,35 @@ async def search(
     return response
 
 
+@app.get("/search/strategy", response_model=SearchResponse)
+async def search_strategy(
+    q: str = Query(..., description="Search query"),
+    mode: str = Query("general", description="Named strategy: general, code, academic, news, or private"),
+    count: int = Query(10, ge=1, le=50, description="Number of results"),
+    domain: str | None = Query(None, description="Filter results to this domain"),
+    exclude_domains: str | None = Query(None, description="Comma-separated domains to exclude"),
+    fetch: bool = Query(False, description="Fetch page content via kill chain"),
+) -> SearchResponse:
+    """Search using a named strategy with visible engine-pack attempts."""
+    return await _search_strategy_impl(
+        q=q,
+        count=count,
+        mode=mode,
+        domain=domain,
+        exclude_domains=exclude_domains,
+        fetch=fetch,
+    )
+
+
 @app.get("/search/extract", response_model=SearchResponse)
 async def search_extract(
     q: str = Query(..., description="Search query"),
     count: int = Query(5, ge=1, le=20, description="Number of results"),
     engines: str | None = Query(None, description="Comma-separated engine names"),
+    mode: str | None = Query(None, description="Named strategy: general, code, academic, news, or private"),
 ) -> SearchResponse:
     """Search and extract content from top results via kill chain."""
-    return await search(q=q, count=count, engines=engines, domain=None, exclude_domains=None, fetch=True)
+    return await search(q=q, count=count, engines=engines, mode=mode, domain=None, exclude_domains=None, fetch=True)
 
 
 @app.get("/search/deep", response_model=SearchResponse)

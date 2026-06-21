@@ -44,6 +44,7 @@ __all__ = [
     "HealthResponse",
     "configure",
     "search",
+    "search_strategy",
     "deep_search",
     "read",
     "read_batch",
@@ -81,6 +82,11 @@ def configure(base_url: str = "http://localhost:3939", timeout: float = 30.0) ->
 def search(query: str, **kwargs) -> SearchResponse:  # type: ignore[no-untyped-def]
     """Search the web using the default client. See :meth:`AgentSearch.search`."""
     return _get_client().search(query, **kwargs)
+
+
+def search_strategy(query: str, **kwargs) -> SearchResponse:  # type: ignore[no-untyped-def]
+    """Search with a named engine strategy. See :meth:`AgentSearch.search_strategy`."""
+    return _get_client().search_strategy(query, **kwargs)
 
 
 def deep_search(query: str, **kwargs) -> SearchResponse:  # type: ignore[no-untyped-def]

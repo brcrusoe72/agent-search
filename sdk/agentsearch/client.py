@@ -203,6 +203,9 @@ class AgentSearch:
             cached=m.get("cached", False),
             response_time_ms=m.get("response_time_ms", 0.0),
             queries_used=m.get("queries_used"),
+            mode=m.get("mode"),
+            engine_attempts=m.get("engine_attempts", []),
+            fallback_reason=m.get("fallback_reason"),
             upstream_status=m.get("upstream_status", "ok"),
             upstream_errors=m.get("upstream_errors", []),
             unresponsive_engines=m.get("unresponsive_engines", []),
@@ -268,6 +271,7 @@ class AgentSearch:
         *,
         count: int = 10,
         engines: Optional[str] = None,
+        mode: Optional[str] = None,
         domain: Optional[str] = None,
         exclude_domains: Optional[str] = None,
         fetch: bool = False,
@@ -278,6 +282,7 @@ class AgentSearch:
             query: Search query string.
             count: Number of results (1-50).
             engines: Comma-separated engine names.
+            mode: Named search strategy: general, code, academic, news, or private.
             domain: Filter results to this domain.
             exclude_domains: Comma-separated domains to exclude.
             fetch: If True, also extract page content via kill chain.
@@ -288,6 +293,8 @@ class AgentSearch:
         params: Dict[str, Any] = {"q": query, "count": count}
         if engines:
             params["engines"] = engines
+        if mode:
+            params["mode"] = mode
         if domain:
             params["domain"] = domain
         if exclude_domains:
@@ -301,12 +308,38 @@ class AgentSearch:
             meta=self._parse_meta(data),
         )
 
+    def search_strategy(
+        self,
+        query: str,
+        *,
+        mode: str = "general",
+        count: int = 10,
+        domain: Optional[str] = None,
+        exclude_domains: Optional[str] = None,
+        fetch: bool = False,
+    ) -> SearchResponse:
+        """Search with a named engine strategy."""
+        params: Dict[str, Any] = {"q": query, "mode": mode, "count": count}
+        if domain:
+            params["domain"] = domain
+        if exclude_domains:
+            params["exclude_domains"] = exclude_domains
+        if fetch:
+            params["fetch"] = "true"
+
+        data = self._get("/search/strategy", params)
+        return SearchResponse(
+            results=[self._parse_search_result(r) for r in data.get("results", [])],
+            meta=self._parse_meta(data),
+        )
+
     def search_extract(
         self,
         query: str,
         *,
         count: int = 5,
         engines: Optional[str] = None,
+        mode: Optional[str] = None,
     ) -> SearchResponse:
         """Search and extract content from top results.
 
@@ -314,6 +347,7 @@ class AgentSearch:
             query: Search query string.
             count: Number of results (1-20).
             engines: Comma-separated engine names.
+            mode: Named search strategy: general, code, academic, news, or private.
 
         Returns:
             SearchResponse with results including extracted content.
@@ -321,6 +355,8 @@ class AgentSearch:
         params: Dict[str, Any] = {"q": query, "count": count}
         if engines:
             params["engines"] = engines
+        if mode:
+            params["mode"] = mode
 
         data = self._get("/search/extract", params)
         return SearchResponse(

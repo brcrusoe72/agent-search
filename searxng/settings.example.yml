@@ -112,6 +112,11 @@ engines:
     shortcut: yn
     disabled: false
 
+  - name: reuters
+    engine: reuters
+    shortcut: reu
+    disabled: false
+
   - name: wikinews
     engine: wikinews
     shortcut: wn
@@ -153,6 +158,11 @@ engines:
   - name: github
     engine: github
     shortcut: gh
+    disabled: false
+
+  - name: docker hub
+    engine: docker_hub
+    shortcut: dh
     disabled: false
 
   - name: lobsters

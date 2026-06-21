@@ -74,7 +74,20 @@ results = client.search("site reliability", domain="google.com")
 
 ---
 
-### `client.search_extract(query, *, count=5, engines=None)`
+### `client.search_strategy(query, *, mode="general", count=10, domain=None, exclude_domains=None, fetch=False)`
+
+Named strategy search. Modes are `general`, `code`, `academic`, `news`, and `private`.
+
+```python
+results = client.search_strategy("fetch api", mode="code", count=5)
+print(results.meta.engine_attempts)
+```
+
+`client.search(...)` and `client.search_extract(...)` also accept `mode=...`.
+
+---
+
+### `client.search_extract(query, *, count=5, engines=None, mode=None)`
 
 Search and automatically extract content from top results via the kill chain.
 

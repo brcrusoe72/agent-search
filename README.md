@@ -90,7 +90,7 @@ AgentSearch delegates engine support to the connected SearXNG instance. The auth
 curl "http://localhost:3939/engines"
 ```
 
-The bundled `searxng/settings.example.yml` explicitly enables 23 engines: Google, Startpage, Brave, Bing, DuckDuckGo, Google Scholar, Semantic Scholar, arXiv, Crossref, OpenAlex, PubMed, Google News, Bing News, Yahoo News, Wikinews, Wikipedia, Wikidata, Hugging Face, Reddit, Hacker News, Stack Overflow, GitHub, and Lobsters.
+The bundled `searxng/settings.example.yml` explicitly enables 25 engines: Google, Startpage, Brave, Bing, DuckDuckGo, Google Scholar, Semantic Scholar, arXiv, Crossref, OpenAlex, PubMed, Google News, Bing News, Yahoo News, Reuters, Wikinews, Wikipedia, Wikidata, Hugging Face, Reddit, Hacker News, Stack Overflow, GitHub, Docker Hub, and Lobsters.
 
 Run `./scripts/prepare-searxng.sh` to create ignored local runtime files at `searxng/settings.yml` and `searxng/settings.tor.yml` with generated SearXNG instance secrets. Do not commit those generated files.
 
@@ -117,6 +117,7 @@ SearXNG finds pages. AgentSearch finds pages, reads them, scores them, deduplica
 | Endpoint | Method | What it does |
 |---|---|---|
 | `/search` | GET | Multi-engine web search with deduplication and scoring |
+| `/search/strategy` | GET | Named search modes: general, code, academic, news, private |
 | `/search/deep` | GET | Server-side query expansion — runs variations in parallel, fuses results |
 | `/search/extract` | GET | Search + inline content extraction in one call |
 | `/search/jobs` | GET | Job search across LinkedIn, Indeed, Glassdoor, ZipRecruiter |
@@ -171,6 +172,15 @@ curl "http://localhost:3939/search/extract?q=python+async+patterns&count=3"
 ```
 
 Returns search results with extracted content inline — no second round-trip to `/read`.
+
+### Strategy search
+
+```bash
+curl "http://localhost:3939/search/strategy?q=fetch+api&mode=code&count=5"
+curl "http://localhost:3939/search?q=AI+regulation&mode=academic&count=5"
+```
+
+Modes validate their declared sources instead of falling back silently: `general` tries Bing first and only uses the non-Bing pack when needed; `code` uses GitHub, MDN, and Docker Hub; `academic` uses arXiv, Crossref, OpenAlex, and Semantic Scholar; `news` uses Reuters, Yahoo News, and Bing News; `private` avoids broad general web engines.
 
 ### Deep search (query expansion)
 

@@ -63,13 +63,30 @@ def make_server(base_url: str, token: str | None = None) -> Server:
             ),
             Tool(
                 name="search",
-                description="SearXNG-backed web search with optional engine, domain, exclusion, and fetch controls.",
+                description="SearXNG-backed web search with optional engine, strategy mode, domain, exclusion, and fetch controls.",
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "query": {"type": "string", "description": "Search query"},
                         "count": {"type": "integer", "description": "Number of results (default 10)", "default": 10},
                         "engines": {"type": "string", "description": "Comma-separated engine names"},
+                        "mode": {"type": "string", "description": "Named strategy: general, code, academic, news, or private"},
+                        "domain": {"type": "string", "description": "Restrict results to this domain"},
+                        "exclude_domains": {"type": "string", "description": "Comma-separated domains to exclude"},
+                        "fetch": {"type": "boolean", "description": "Also extract page content from top results", "default": False},
+                    },
+                    "required": ["query"],
+                },
+            ),
+            Tool(
+                name="search_strategy",
+                description="Search with a named engine strategy. Modes: general, code, academic, news, private.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Search query"},
+                        "mode": {"type": "string", "description": "Named strategy (default general)", "default": "general"},
+                        "count": {"type": "integer", "description": "Number of results (default 10)", "default": 10},
                         "domain": {"type": "string", "description": "Restrict results to this domain"},
                         "exclude_domains": {"type": "string", "description": "Comma-separated domains to exclude"},
                         "fetch": {"type": "boolean", "description": "Also extract page content from top results", "default": False},
@@ -86,6 +103,7 @@ def make_server(base_url: str, token: str | None = None) -> Server:
                         "query": {"type": "string", "description": "Search query"},
                         "count": {"type": "integer", "description": "Number of results (default 5)", "default": 5},
                         "engines": {"type": "string", "description": "Comma-separated engine names"},
+                        "mode": {"type": "string", "description": "Named strategy: general, code, academic, news, or private"},
                     },
                     "required": ["query"],
                 },
@@ -203,14 +221,25 @@ def make_server(base_url: str, token: str | None = None) -> Server:
 
                 elif name == "search":
                     params = {"q": arguments["query"], "count": arguments.get("count", 10)}
-                    _add_optional(params, arguments, "engines", "domain", "exclude_domains")
+                    _add_optional(params, arguments, "engines", "mode", "domain", "exclude_domains")
                     if arguments.get("fetch"):
                         params["fetch"] = "true"
                     r = await client.get("/search", params=params)
 
+                elif name == "search_strategy":
+                    params = {
+                        "q": arguments["query"],
+                        "mode": arguments.get("mode", "general"),
+                        "count": arguments.get("count", 10),
+                    }
+                    _add_optional(params, arguments, "domain", "exclude_domains")
+                    if arguments.get("fetch"):
+                        params["fetch"] = "true"
+                    r = await client.get("/search/strategy", params=params)
+
                 elif name == "search_extract":
                     params = {"q": arguments["query"], "count": arguments.get("count", 5)}
-                    _add_optional(params, arguments, "engines")
+                    _add_optional(params, arguments, "engines", "mode")
                     r = await client.get("/search/extract", params=params)
 
                 elif name == "deep_search":

@@ -133,12 +133,36 @@ class UnresponsiveFakeSearxngClient:
 class EngineAwareFakeSearxngClient:
     def __init__(self) -> None:
         self.search_params: list[dict] = []
+        self.mdn_params: list[dict] = []
 
     async def get(self, url: str, params: dict | None = None, timeout: float | None = None) -> FakeResponse:
+        if url.startswith("https://developer.mozilla.org/api/v1/search"):
+            self.mdn_params.append(dict(params or {}))
+            return FakeResponse({
+                "documents": [
+                    {
+                        "title": "Fetch API - Web APIs | MDN",
+                        "mdn_url": "/en-US/docs/Web/API/Fetch_API",
+                        "summary": "The Fetch API provides an interface for fetching resources.",
+                    }
+                ]
+            })
         if url.endswith("/config"):
             return FakeResponse({
                 "engines": [
+                    {"name": "duckduckgo", "shortcut": "ddg", "enabled": True, "categories": ["general", "web"]},
+                    {"name": "brave", "shortcut": "br", "enabled": True, "categories": ["general", "web"]},
+                    {"name": "google", "shortcut": "g", "enabled": True, "categories": ["general", "web"]},
+                    {"name": "startpage", "shortcut": "sp", "enabled": True, "categories": ["general", "web"]},
                     {"name": "github", "shortcut": "gh", "enabled": True, "categories": ["it", "repos"]},
+                    {"name": "docker hub", "shortcut": "dh", "enabled": True, "categories": ["it"]},
+                    {"name": "arxiv", "shortcut": "ax", "enabled": True, "categories": ["science"]},
+                    {"name": "crossref", "shortcut": "cr", "enabled": True, "categories": ["science"]},
+                    {"name": "openalex", "shortcut": "oa", "enabled": True, "categories": ["science"]},
+                    {"name": "semantic scholar", "shortcut": "ss", "enabled": True, "categories": ["science"]},
+                    {"name": "reuters", "shortcut": "reu", "enabled": True, "categories": ["news"]},
+                    {"name": "yahoo news", "shortcut": "yn", "enabled": True, "categories": ["news"]},
+                    {"name": "bing news", "shortcut": "bn", "enabled": True, "categories": ["news"]},
                     {"name": "bing", "shortcut": "b", "enabled": True, "categories": ["general", "web"]},
                     {"name": "disabled", "shortcut": "off", "enabled": False, "categories": ["general"]},
                 ]
@@ -147,27 +171,49 @@ class EngineAwareFakeSearxngClient:
             search_params = params or {}
             self.search_params.append(dict(search_params))
             engine = search_params.get("engines")
-            if engine == "github":
-                return FakeResponse({
-                    "results": [
-                        {
-                            "title": "python/cpython",
-                            "url": "https://github.com/python/cpython",
-                            "content": "The Python programming language",
-                            "engines": ["github"],
-                        }
-                    ]
-                })
-            return FakeResponse({
-                "results": [
-                    {
-                        "title": "example",
-                        "url": "https://example.com/search-result",
-                        "content": "Example web result",
-                        "engines": [engine or "bing"],
-                    }
-                ]
-            })
+            if engine == "bing" and "fallback" in search_params.get("q", ""):
+                return FakeResponse({"results": []})
+
+            engine_names = [item.strip() for item in (engine or "bing").split(",") if item.strip()]
+            results = []
+            for item in engine_names:
+                if item == "github":
+                    results.append({
+                        "title": "python/cpython",
+                        "url": "https://github.com/python/cpython",
+                        "content": "The Python programming language",
+                        "engines": ["github"],
+                    })
+                elif item == "docker hub":
+                    results.append({
+                        "title": "python - Docker Official Image",
+                        "url": "https://hub.docker.com/_/python",
+                        "content": "Python Docker image",
+                        "engines": ["docker hub"],
+                    })
+                elif item == "arxiv":
+                    results.append({
+                        "title": "Attention Is All You Need",
+                        "url": "https://arxiv.org/abs/1706.03762",
+                        "content": "Transformer architecture paper",
+                        "engines": ["arxiv"],
+                    })
+                elif item == "reuters":
+                    results.append({
+                        "title": "Reuters technology news",
+                        "url": "https://www.reuters.com/technology/",
+                        "content": "Reuters news result",
+                        "engines": ["reuters"],
+                    })
+                else:
+                    slug = item.replace(" ", "-")
+                    results.append({
+                        "title": f"{item} result",
+                        "url": f"https://example.com/{slug}",
+                        "content": f"Example {item} result",
+                        "engines": [item],
+                    })
+            return FakeResponse({"results": results})
         return FakeResponse({})
 
 
@@ -311,6 +357,86 @@ def test_search_resolves_engine_shortcuts(monkeypatch: pytest.MonkeyPatch, clien
     assert response.status_code == 200
     assert fake.search_params[0]["engines"] == "github"
     assert response.json()["meta"]["engines_used"] == ["github"]
+
+
+def test_search_mode_rejects_explicit_engines(client: AppClient) -> None:
+    response = client.get("/search", params={"q": "python", "mode": "code", "engines": "github"})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Use either 'mode' or 'engines', not both"
+
+
+def test_search_strategy_rejects_unknown_mode(client: AppClient) -> None:
+    response = client.get("/search/strategy", params={"q": "python", "mode": "unknown"})
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["message"] == "Unknown search strategy mode"
+    assert "code" in detail["available_modes"]
+
+
+def test_search_strategy_general_uses_bing_first(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
+    fake = EngineAwareFakeSearxngClient()
+    monkeypatch.setattr(main, "http_client", fake)
+
+    response = client.get("/search", params={"q": "python", "count": 1, "mode": "general"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert fake.search_params == [{"q": "python", "format": "json", "pageno": 1, "engines": "bing"}]
+    assert data["meta"]["mode"] == "general"
+    assert data["meta"]["engine_attempts"][0]["engines"] == ["bing"]
+    assert data["meta"]["fallback_reason"] is None
+
+
+def test_search_strategy_general_falls_back_to_non_bing_pack(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
+    fake = EngineAwareFakeSearxngClient()
+    monkeypatch.setattr(main, "http_client", fake)
+
+    response = client.get("/search/strategy", params={"q": "fallback query", "count": 1, "mode": "general"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert [params["engines"] for params in fake.search_params] == [
+        "bing",
+        "duckduckgo,brave,google,startpage",
+    ]
+    assert data["meta"]["fallback_reason"] == "no_results"
+    assert data["meta"]["engine_attempts"][1]["engines"] == ["duckduckgo", "brave", "google", "startpage"]
+    assert "bing" not in data["meta"]["engines_used"]
+
+
+def test_search_strategy_code_uses_github_mdn_and_docker_hub(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
+    fake = EngineAwareFakeSearxngClient()
+    monkeypatch.setattr(main, "http_client", fake)
+
+    response = client.get("/search/strategy", params={"q": "fetch api", "count": 10, "mode": "code"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert [params["engines"] for params in fake.search_params] == ["github", "docker hub"]
+    assert fake.mdn_params == [{"q": "fetch api", "locale": "en-US"}]
+    assert [attempt["engines"] for attempt in data["meta"]["engine_attempts"]] == [
+        ["github"],
+        ["mdn"],
+        ["docker hub"],
+    ]
+    assert {"github", "mdn", "docker hub"}.issubset(set(data["meta"]["engines_used"]))
+    assert data["meta"]["fallback_reason"] is None
+
+
+def test_search_strategy_news_uses_requested_news_pack(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
+    fake = EngineAwareFakeSearxngClient()
+    monkeypatch.setattr(main, "http_client", fake)
+
+    response = client.get("/search", params={"q": "semiconductors", "count": 3, "mode": "news"})
+
+    assert response.status_code == 200
+    assert fake.search_params[0]["engines"] == "reuters,yahoo news,bing news"
+    assert "categories" not in fake.search_params[0]
+    meta = response.json()["meta"]
+    assert meta["mode"] == "news"
+    assert meta["engine_attempts"][0]["engines"] == ["reuters", "yahoo news", "bing news"]
 
 
 def test_domain_filter_does_not_site_scope_non_web_engines(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
