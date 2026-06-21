@@ -122,12 +122,25 @@ results = client.search_policy("South China Sea maritime disputes", fetch=True)
 
 ### `client.read(url, *, max_chars=None, skip_cache=False)`
 
-Extract readable content from any URL using 9 escalating strategies (direct → readability → UA rotation → Wayback Machine → Google Cache → search-about → custom adapters → PDF → YouTube).
+Extract readable content from any URL using escalating strategies (direct -> readability -> UA rotation -> browser render -> Wayback Machine -> Google Cache -> search-about -> custom adapters -> PDF -> YouTube).
 
 ```python
 content = client.read("https://example.com/article")
 print(content.content)
 print(f"Strategy: {content.strategy}, Chars: {content.chars}")
+```
+
+---
+
+### `client.browser_fetch(url, *, max_chars=None, max_links=None, timeout_ms=None)`
+
+Render a safe target URL in an ephemeral browser context and extract readable text plus links. This is for JS-rendered pages; CAPTCHA/challenge pages are reported, not bypassed.
+
+```python
+rendered = client.browser_fetch("https://example.com/app", max_links=20)
+print(rendered.title)
+print(rendered.content)
+print(rendered.links[:3])
 ```
 
 ---

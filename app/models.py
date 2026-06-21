@@ -90,6 +90,31 @@ class BatchReadResponse(BaseModel):
     failed: int
 
 
+class BrowserLink(BaseModel):
+    """Link extracted from a rendered page."""
+
+    text: str
+    url: str
+
+
+class BrowserFetchResponse(BaseModel):
+    """Response from /providers/browser/fetch."""
+
+    url: str
+    final_url: str = ""
+    title: str = ""
+    content: str | None = Field(None, description="Extracted rendered text")
+    chars: int = 0
+    links: list[BrowserLink] = Field(default_factory=list)
+    success: bool = False
+    strategy: str = "browser-render"
+    error: str | None = None
+    challenge_detected: bool = False
+    blocked_reason: str | None = None
+    render_time_ms: float = 0.0
+    trust: TrustInfo | None = Field(None, description="Domain trust assessment")
+
+
 # ---------------------------------------------------------------------------
 # News
 # ---------------------------------------------------------------------------

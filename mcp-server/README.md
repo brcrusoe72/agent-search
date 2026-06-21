@@ -8,14 +8,14 @@
 
 MCP tool server that gives AI agents access to the engines enabled in your connected SearXNG-backed AgentSearch instance. Self-hosted. No third-party search API keys required; optional local bearer auth is supported.
 
-Built on [AgentSearch](https://github.com/brcrusoe72/agent-search), which wraps SearXNG with multi-engine fusion, a 9-strategy content extraction kill chain, news aggregation, and job search.
+Built on [AgentSearch](https://github.com/brcrusoe72/agent-search), which wraps SearXNG with multi-engine fusion, kill-chain content extraction, browser-rendered extraction, news aggregation, and job search.
 
 ## Why AgentSearch?
 
 | Feature | AgentSearch | Other search MCP servers |
 |---------|-------------|-------------------------|
 | Search engines | SearXNG-backed; run `/engines` for the live list | Usually 1-3 |
-| Content extraction | 9-strategy kill chain (handles paywalls, Cloudflare, etc.) | Basic fetch or none |
+| Content extraction | Kill chain plus browser-render extraction | Basic fetch or none |
 | Multi-query fusion | ✓ (generates 3-5 query variations) | ✗ |
 | News aggregation | News engines enabled in SearXNG | ✗ |
 | Job search | Dedicated job board search | ✗ |
@@ -37,7 +37,8 @@ Built on [AgentSearch](https://github.com/brcrusoe72/agent-search), which wraps 
 | `policy_search` | Policy/geopolitical search with source-library and domain-quality ranking |
 | `source_search` | Trace primary sources across curated institutions |
 | `source_institutions` | List curated source registry institutions |
-| `read_url` | Extract content from any URL using a 9-strategy kill chain |
+| `read_url` | Extract content from any URL using the kill chain |
+| `browser_fetch` | Render a safe target URL in an ephemeral browser context and extract text/links |
 | `read_batch` | Batch extract content from up to 20 URLs concurrently |
 | `news` | Structured news search using enabled or explicitly selected SearXNG news engines |
 | `search_jobs` | Job board search with location and salary filters |
@@ -140,19 +141,22 @@ The server uses **stdio transport**. Launch `python server.py` as a subprocess a
 
 ## How the Kill Chain Works
 
-When extracting content from a URL, AgentSearch tries up to 9 strategies in sequence:
+When extracting content from a URL, AgentSearch tries escalating strategies in sequence:
 
 1. **Direct fetch** — simple HTTP GET
 2. **Readability extraction** — strip boilerplate, extract article
 3. **User-Agent rotation** — try different browser signatures
-4. **Wayback Machine** — fetch cached version from Internet Archive
-5. **Google Cache** — fetch Google's cached copy
-6. **Search-about** — find the content via search engines
-7. **Custom adapters** — site-specific extractors
-8. **PDF extraction** — for PDF URLs
-9. **YouTube transcript** — for YouTube URLs
+4. **Browser render** — render JS-heavy target pages in an ephemeral context
+5. **Wayback Machine** — fetch cached version from Internet Archive
+6. **Google Cache** — fetch Google's cached copy
+7. **Search-about** — find the content via search engines
+8. **Custom adapters** — site-specific extractors
+9. **PDF extraction** — for PDF URLs
+10. **YouTube transcript** — for YouTube URLs
 
 Each strategy is tried until one succeeds. The Evolver system tracks success rates by domain and strategy, learning which approaches work for which sites.
+
+The `browser_fetch` MCP tool exposes the browser renderer directly. It extracts rendered text and links from safe target pages, and reports CAPTCHA/challenge pages instead of trying to bypass them.
 
 ## Architecture
 
