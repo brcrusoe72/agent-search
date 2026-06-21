@@ -138,7 +138,7 @@ class EngineAwareFakeSearxngClient:
         self.mdn_params: list[dict] = []
         self.github_params: list[dict] = []
         self.docker_hub_params: list[dict] = []
-        self.pypi_params: list[dict] = []
+        self.pypi_packages: list[str] = []
         self.wikipedia_params: list[dict] = []
         self.wikidata_params: list[dict] = []
         self.hackernews_params: list[dict] = []
@@ -149,6 +149,7 @@ class EngineAwareFakeSearxngClient:
         self.semantic_scholar_params: list[dict] = []
 
     async def get(self, url: str, params: dict | None = None, timeout: float | None = None, **kwargs) -> FakeResponse:
+        url = str(url)
         if url.startswith("https://developer.mozilla.org/api/v1/search"):
             self.mdn_params.append(dict(params or {}))
             return FakeResponse({
@@ -183,15 +184,17 @@ class EngineAwareFakeSearxngClient:
                     }
                 ]
             })
-        if url.startswith("https://pypi.org/search/"):
-            self.pypi_params.append(dict(params or {}))
-            return FakeResponse({}, text="""
-                <a class="package-snippet" href="/project/fastapi/">
-                  <span class="package-snippet__name">fastapi</span>
-                  <span class="package-snippet__version">1.0.0</span>
-                  <p class="package-snippet__description">FastAPI framework</p>
-                </a>
-            """)
+        if url.startswith("https://pypi.org/pypi/") and url.endswith("/json"):
+            package = url.removeprefix("https://pypi.org/pypi/").removesuffix("/json")
+            self.pypi_packages.append(package)
+            return FakeResponse({
+                "info": {
+                    "name": package,
+                    "package_url": f"https://pypi.org/project/{package}/",
+                    "summary": f"{package} Python package",
+                    "version": "1.0.0",
+                }
+            })
         if url.startswith("https://en.wikipedia.org/w/api.php"):
             self.wikipedia_params.append(dict(params or {}))
             return FakeResponse({
@@ -586,7 +589,7 @@ def test_search_strategy_code_uses_direct_code_providers(monkeypatch: pytest.Mon
     assert fake.github_params[0]["q"] == "fetch api"
     assert fake.mdn_params == [{"q": "fetch api", "locale": "en-US"}]
     assert fake.docker_hub_params[0]["query"] == "fetch api"
-    assert fake.pypi_params == [{"q": "fetch api"}]
+    assert fake.pypi_packages == ["fetch"]
     assert [attempt["engines"] for attempt in data["meta"]["engine_attempts"]] == [
         ["github"],
         ["mdn"],
