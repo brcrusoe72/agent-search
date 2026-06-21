@@ -53,6 +53,7 @@ from app.models import (
     AdaptStatsResponse,
     BatchReadRequest,
     BatchReadResponse,
+    BrowserFetchResponse,
     EngineInfo,
     EvolveResponse,
     HealthResponse,
@@ -1321,6 +1322,19 @@ async def search_stats() -> SearchStats:
     )
 
 
+def _trust_info(trust) -> TrustInfo | None:
+    if not trust:
+        return None
+    return TrustInfo(
+        domain=trust.domain,
+        tier=trust.tier,
+        score=trust.score,
+        reasons=trust.reasons,
+        https=trust.https,
+        lookalike_of=trust.lookalike_of,
+    )
+
+
 # =========================================================================
 # READ ENDPOINTS (Kill Chain)
 # =========================================================================
@@ -1333,8 +1347,8 @@ async def read_url(
 ) -> ReadResponse:
     """Extract readable content from a URL using the kill chain.
 
-    Tries 9 strategies in escalating order: direct fetch, readability,
-    UA rotation, Wayback Machine, Google Cache, search-about, custom
+    Tries escalating strategies: direct fetch, readability, UA rotation,
+    browser rendering, Wayback Machine, Google Cache, search-about, custom
     adapters, PDF extraction, and YouTube transcripts.
     """
     assert http_client is not None
@@ -1354,14 +1368,6 @@ async def read_url(
             result.chars, result.strategies_tried, result.error,
         )
 
-    trust_info = None
-    if result.trust:
-        trust_info = TrustInfo(
-            domain=result.trust.domain, tier=result.trust.tier,
-            score=result.trust.score, reasons=result.trust.reasons,
-            https=result.trust.https, lookalike_of=result.trust.lookalike_of,
-        )
-
     return ReadResponse(
         url=result.url,
         content=result.content,
@@ -1371,7 +1377,51 @@ async def read_url(
         strategies_tried=result.strategies_tried,
         error=result.error,
         success=result.success,
-        trust=trust_info,
+        trust=_trust_info(result.trust),
+    )
+
+
+@app.get("/providers/browser/fetch", response_model=BrowserFetchResponse)
+async def browser_fetch(
+    url: str = Query(..., description="URL to render and extract"),
+    max_chars: int | None = Query(None, ge=200, le=50000, description="Max content length"),
+    max_links: int | None = Query(None, ge=0, le=200, description="Max rendered links to return"),
+    timeout_ms: int | None = Query(None, ge=1000, le=60000, description="Browser render timeout in milliseconds"),
+) -> BrowserFetchResponse:
+    """Render a safe page in an ephemeral browser context and extract text/links."""
+    from app.browser_renderer import render_browser_page
+
+    result = await render_browser_page(
+        url,
+        max_chars=max_chars,
+        max_links=max_links,
+        timeout_ms=timeout_ms,
+    )
+    if content_cache and result.success and result.content:
+        await content_cache.set(result.final_url or result.url, result.content, result.strategy)
+        await content_cache.log_fetch(
+            result.final_url or result.url,
+            result.strategy,
+            result.success,
+            result.chars,
+            [result.strategy],
+            result.error,
+        )
+
+    return BrowserFetchResponse(
+        url=result.url,
+        final_url=result.final_url,
+        title=result.title,
+        content=result.content,
+        chars=result.chars,
+        links=[{"text": link.text, "url": link.url} for link in result.links],
+        success=result.success,
+        strategy=result.strategy,
+        error=result.error,
+        challenge_detected=result.challenge_detected,
+        blocked_reason=result.blocked_reason,
+        render_time_ms=result.render_time_ms,
+        trust=_trust_info(result.trust),
     )
 
 
@@ -1407,11 +1457,7 @@ async def read_batch(body: BatchReadRequest) -> BatchReadResponse:
             strategies_tried=r.strategies_tried,
             error=r.error,
             success=r.success,
-            trust=TrustInfo(
-                domain=r.trust.domain, tier=r.trust.tier,
-                score=r.trust.score, reasons=r.trust.reasons,
-                https=r.trust.https, lookalike_of=r.trust.lookalike_of,
-            ) if r.trust else None,
+            trust=_trust_info(r.trust),
         )
         for r in results
     ]

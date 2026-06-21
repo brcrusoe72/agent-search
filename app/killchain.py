@@ -810,6 +810,29 @@ async def strategy_youtube(url: str) -> Optional[str]:
     return await loop.run_in_executor(None, strategy_youtube_sync, url)
 
 
+async def strategy_browser_render(url: str, max_chars: int | None = None) -> Optional[str]:
+    """Browser-rendered extraction for JS-rendered pages.
+
+    This renderer does not solve challenges or bypass blocked search engines.
+    It returns content only when an ephemeral browser context can render useful
+    page text without hitting a CAPTCHA/challenge page.
+    """
+    try:
+        from app.browser_renderer import render_browser_page
+
+        result = await render_browser_page(url, max_chars=max_chars or MAX_CONTENT_CHARS)
+        if result.success and result.content:
+            return result.content
+        if result.challenge_detected:
+            logger.info("Browser render detected challenge for %s", _safe_log_value(_hostname(url)))
+        elif result.error:
+            logger.debug("Browser render failed for %s: %s", _safe_log_value(_hostname(url)), result.error)
+        return None
+    except Exception as exc:
+        logger.debug("Browser render strategy failed for %s: %s", _safe_log_value(_hostname(url)), exc)
+        return None
+
+
 # ---------------------------------------------------------------------------
 # The Kill Chain
 # ---------------------------------------------------------------------------
@@ -971,6 +994,7 @@ async def kill_chain(
         ("direct", lambda: strategy_direct(client, url)),
         ("readability", lambda: strategy_readability(client, url)),
         ("ua-rotate", lambda: strategy_ua_rotation(client, url)),
+        ("browser-render", lambda: strategy_browser_render(url, effective_max)),
     ]
 
     # If Cloudflare detected for this domain, insert CF adapter before wayback/cache

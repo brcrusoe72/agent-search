@@ -12,6 +12,8 @@ from urllib.request import Request, urlopen
 
 from .models import (
     BatchReadResponse,
+    BrowserFetchResponse,
+    BrowserLink,
     HealthResponse,
     JobResult,
     JobSearchResponse,
@@ -237,6 +239,27 @@ class AgentSearch:
         )
 
     @staticmethod
+    def _parse_browser_fetch_response(d: Dict[str, Any]) -> BrowserFetchResponse:
+        return BrowserFetchResponse(
+            url=d.get("url", ""),
+            final_url=d.get("final_url", ""),
+            title=d.get("title", ""),
+            content=d.get("content"),
+            chars=d.get("chars", 0),
+            links=[
+                BrowserLink(text=item.get("text", ""), url=item.get("url", ""))
+                for item in d.get("links", [])
+                if isinstance(item, dict)
+            ],
+            success=d.get("success", False),
+            strategy=d.get("strategy", "browser-render"),
+            error=d.get("error"),
+            challenge_detected=d.get("challenge_detected", False),
+            blocked_reason=d.get("blocked_reason"),
+            render_time_ms=d.get("render_time_ms", 0.0),
+        )
+
+    @staticmethod
     def _parse_news_result(d: Dict[str, Any]) -> NewsResult:
         return NewsResult(
             title=d.get("title", ""),
@@ -421,9 +444,9 @@ class AgentSearch:
     ) -> ReadResult:
         """Extract readable content from a URL using the kill chain.
 
-        Tries 9 strategies in escalating order: direct fetch, readability,
-        UA rotation, Wayback Machine, Google Cache, search-about, custom
-        adapters, PDF extraction, and YouTube transcripts.
+        Tries escalating strategies: direct fetch, readability, UA rotation,
+        browser rendering, Wayback Machine, Google Cache, search-about,
+        custom adapters, PDF extraction, and YouTube transcripts.
 
         Args:
             url: URL to extract content from.
@@ -468,6 +491,30 @@ class AgentSearch:
             successful=data.get("successful", 0),
             failed=data.get("failed", 0),
         )
+
+    def browser_fetch(
+        self,
+        url: str,
+        *,
+        max_chars: Optional[int] = None,
+        max_links: Optional[int] = None,
+        timeout_ms: Optional[int] = None,
+    ) -> BrowserFetchResponse:
+        """Render a URL in an ephemeral browser context and extract text/links.
+
+        This endpoint is for JS-rendered target pages. It reports CAPTCHA or
+        challenge pages as blocked instead of trying to bypass them.
+        """
+        params: Dict[str, Any] = {"url": url}
+        if max_chars is not None:
+            params["max_chars"] = max_chars
+        if max_links is not None:
+            params["max_links"] = max_links
+        if timeout_ms is not None:
+            params["timeout_ms"] = timeout_ms
+
+        data = self._get("/providers/browser/fetch", params)
+        return self._parse_browser_fetch_response(data)
 
     def news(
         self,

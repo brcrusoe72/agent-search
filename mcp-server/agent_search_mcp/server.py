@@ -168,13 +168,27 @@ def make_server(base_url: str, token: str | None = None) -> Server:
             ),
             Tool(
                 name="read_url",
-                description="Extract readable content from any URL using a 9-strategy kill chain (direct, readability, UA rotation, Wayback, Google Cache, etc).",
+                description="Extract readable content from any URL using the kill chain, including direct fetch, readability, UA rotation, browser render, Wayback, cache, adapters, PDF, and YouTube.",
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "url": {"type": "string", "description": "URL to extract content from"},
                         "max_chars": {"type": "integer", "description": "Maximum content length"},
                         "skip_cache": {"type": "boolean", "description": "Bypass content cache", "default": False},
+                    },
+                    "required": ["url"],
+                },
+            ),
+            Tool(
+                name="browser_fetch",
+                description="Render a safe URL in an ephemeral browser context and extract readable text/links. Reports challenges instead of bypassing them.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string", "description": "URL to render and extract"},
+                        "max_chars": {"type": "integer", "description": "Maximum extracted content length"},
+                        "max_links": {"type": "integer", "description": "Maximum rendered links to return"},
+                        "timeout_ms": {"type": "integer", "description": "Browser render timeout in milliseconds"},
                     },
                     "required": ["url"],
                 },
@@ -284,6 +298,11 @@ def make_server(base_url: str, token: str | None = None) -> Server:
                     if arguments.get("skip_cache"):
                         params["skip_cache"] = "true"
                     r = await client.get("/read", params=params)
+
+                elif name == "browser_fetch":
+                    params = {"url": arguments["url"]}
+                    _add_optional(params, arguments, "max_chars", "max_links", "timeout_ms")
+                    r = await client.get("/providers/browser/fetch", params=params)
 
                 elif name == "read_batch":
                     body = {"urls": arguments["urls"]}
