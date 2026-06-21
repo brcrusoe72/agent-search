@@ -19,14 +19,16 @@ from app import killchain
 from app import main
 from app.cache import Cache
 from app.database import QueryDatabase
+from app.dedup import deduplicate_with_scoring
 from adapters import medium as medium_adapter
 from adapters.safe_fetch import safe_requests_get
 
 
 class FakeResponse:
-    def __init__(self, payload: dict, status_code: int = 200) -> None:
+    def __init__(self, payload: dict, status_code: int = 200, text: str | None = None) -> None:
         self._payload = payload
         self.status_code = status_code
+        self.text = text or ""
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
@@ -38,7 +40,7 @@ class FakeResponse:
 
 
 class FakeSearxngClient:
-    async def get(self, url: str, params: dict | None = None, timeout: float | None = None) -> FakeResponse:
+    async def get(self, url: str, params: dict | None = None, timeout: float | None = None, **kwargs) -> FakeResponse:
         if url.endswith("/healthz"):
             return FakeResponse({})
         if url.endswith("/config"):
@@ -74,7 +76,7 @@ class DomainFakeSearxngClient:
     def __init__(self) -> None:
         self.queries: list[str] = []
 
-    async def get(self, url: str, params: dict | None = None, timeout: float | None = None) -> FakeResponse:
+    async def get(self, url: str, params: dict | None = None, timeout: float | None = None, **kwargs) -> FakeResponse:
         if url.endswith("/search"):
             self.queries.append((params or {}).get("q", ""))
             return FakeResponse({
@@ -134,8 +136,14 @@ class EngineAwareFakeSearxngClient:
     def __init__(self) -> None:
         self.search_params: list[dict] = []
         self.mdn_params: list[dict] = []
+        self.github_params: list[dict] = []
+        self.docker_hub_params: list[dict] = []
+        self.arxiv_params: list[dict] = []
+        self.crossref_params: list[dict] = []
+        self.openalex_params: list[dict] = []
+        self.semantic_scholar_params: list[dict] = []
 
-    async def get(self, url: str, params: dict | None = None, timeout: float | None = None) -> FakeResponse:
+    async def get(self, url: str, params: dict | None = None, timeout: float | None = None, **kwargs) -> FakeResponse:
         if url.startswith("https://developer.mozilla.org/api/v1/search"):
             self.mdn_params.append(dict(params or {}))
             return FakeResponse({
@@ -144,6 +152,76 @@ class EngineAwareFakeSearxngClient:
                         "title": "Fetch API - Web APIs | MDN",
                         "mdn_url": "/en-US/docs/Web/API/Fetch_API",
                         "summary": "The Fetch API provides an interface for fetching resources.",
+                    }
+                ]
+            })
+        if url.startswith("https://api.github.com/search/repositories"):
+            self.github_params.append(dict(params or {}))
+            return FakeResponse({
+                "items": [
+                    {
+                        "full_name": "python/cpython",
+                        "html_url": "https://github.com/python/cpython?utm_source=test",
+                        "description": "The Python programming language",
+                        "stargazers_count": 65000,
+                    }
+                ]
+            })
+        if url.startswith("https://hub.docker.com/v2/search/repositories/"):
+            self.docker_hub_params.append(dict(params or {}))
+            return FakeResponse({
+                "results": [
+                    {
+                        "repo_name": "library/python",
+                        "short_description": "Python Docker image",
+                        "pull_count": 1000000,
+                    }
+                ]
+            })
+        if url.startswith("https://export.arxiv.org/api/query"):
+            self.arxiv_params.append(dict(params or {}))
+            return FakeResponse({}, text="""<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>https://arxiv.org/abs/1706.03762</id>
+    <title>Attention Is All You Need</title>
+    <summary>Transformer architecture paper</summary>
+  </entry>
+</feed>""")
+        if url.startswith("https://api.crossref.org/works"):
+            self.crossref_params.append(dict(params or {}))
+            return FakeResponse({
+                "message": {
+                    "items": [
+                        {
+                            "title": ["Attention is all you need"],
+                            "DOI": "10.5555/attention",
+                            "container-title": ["NeurIPS"],
+                            "abstract": "Transformer paper",
+                        }
+                    ]
+                }
+            })
+        if url.startswith("https://api.openalex.org/works"):
+            self.openalex_params.append(dict(params or {}))
+            return FakeResponse({
+                "results": [
+                    {
+                        "display_name": "Attention Is All You Need",
+                        "doi": "https://doi.org/10.5555/openalex",
+                        "abstract_inverted_index": {"Transformer": [0], "paper": [1]},
+                    }
+                ]
+            })
+        if url.startswith("https://api.semanticscholar.org/graph/v1/paper/search"):
+            self.semantic_scholar_params.append(dict(params or {}))
+            return FakeResponse({
+                "data": [
+                    {
+                        "title": "Attention Is All You Need",
+                        "url": "https://www.semanticscholar.org/paper/example",
+                        "abstract": "Transformer paper",
+                        "citationCount": 100000,
                     }
                 ]
             })
@@ -300,6 +378,19 @@ def test_search_cache_distinguishes_filters_and_fetch() -> None:
     assert local_cache.get("same query", "", 10, fetch=True) is None
 
 
+def test_search_result_urls_strip_tracking_params() -> None:
+    results = deduplicate_with_scoring([
+        {
+            "title": "tracked",
+            "url": "https://example.com/page?utm_source=newsletter&id=123&fbclid=abc",
+            "content": "Tracked result",
+            "engines": ["test"],
+        }
+    ])
+
+    assert results[0].url == "https://example.com/page?id=123"
+
+
 def test_search_endpoint_cache_distinguishes_domain_filter(client: AppClient) -> None:
     unfiltered = client.get("/search", params={"q": "cache domain", "count": 2})
     assert unfiltered.status_code == 200
@@ -414,15 +505,40 @@ def test_search_strategy_code_uses_github_mdn_and_docker_hub(monkeypatch: pytest
 
     assert response.status_code == 200
     data = response.json()
-    assert [params["engines"] for params in fake.search_params] == ["github", "docker hub"]
+    assert fake.search_params == []
+    assert fake.github_params[0]["q"] == "fetch api"
     assert fake.mdn_params == [{"q": "fetch api", "locale": "en-US"}]
+    assert fake.docker_hub_params[0]["query"] == "fetch api"
     assert [attempt["engines"] for attempt in data["meta"]["engine_attempts"]] == [
         ["github"],
         ["mdn"],
         ["docker hub"],
     ]
     assert {"github", "mdn", "docker hub"}.issubset(set(data["meta"]["engines_used"]))
+    assert data["results"][0]["url"] == "https://github.com/python/cpython"
     assert data["meta"]["fallback_reason"] is None
+
+
+def test_search_strategy_academic_uses_direct_providers(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
+    fake = EngineAwareFakeSearxngClient()
+    monkeypatch.setattr(main, "http_client", fake)
+
+    response = client.get("/search/strategy", params={"q": "transformer attention", "count": 10, "mode": "academic"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert fake.search_params == []
+    assert fake.arxiv_params[0]["search_query"] == "all:transformer attention"
+    assert fake.crossref_params[0]["query"] == "transformer attention"
+    assert fake.openalex_params[0]["search"] == "transformer attention"
+    assert fake.semantic_scholar_params[0]["query"] == "transformer attention"
+    assert [attempt["engines"] for attempt in data["meta"]["engine_attempts"]] == [
+        ["arxiv"],
+        ["crossref"],
+        ["openalex"],
+        ["semantic scholar"],
+    ]
+    assert {"arxiv", "crossref", "openalex", "semantic scholar"}.issubset(set(data["meta"]["engines_used"]))
 
 
 def test_search_strategy_news_uses_requested_news_pack(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
@@ -473,6 +589,16 @@ def test_search_preserves_upstream_diagnostics(monkeypatch: pytest.MonkeyPatch, 
     assert meta["unresponsive_engines"] == ["duckduckgo", "brave"]
     assert "duckduckgo: timeout" in meta["upstream_errors"]
     assert "all engines failed" in meta["upstream_errors"]
+
+
+def test_upstream_metadata_marks_partial_provider_failure_degraded() -> None:
+    metadata = main._upstream_metadata(
+        main.SearxngQueryResponse(results=[{"url": "https://example.com"}]),
+        main.SearxngQueryResponse(results=[], upstream_status="error", upstream_errors=["semantic scholar: 429"]),
+    )
+
+    assert metadata["upstream_status"] == "degraded"
+    assert metadata["upstream_errors"] == ["semantic scholar: 429"]
 
 
 def test_health_degrades_when_search_probe_has_no_results(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:

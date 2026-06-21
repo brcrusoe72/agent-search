@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from app.models import SearchResult
 
@@ -22,9 +22,42 @@ DOMAIN_AUTHORITY = {
 }
 
 
+TRACKING_PARAMS = {
+    "fbclid",
+    "gclid",
+    "igshid",
+    "mc_cid",
+    "mc_eid",
+    "mkt_tok",
+    "msclkid",
+    "ref",
+    "ref_src",
+    "spm",
+    "utm_campaign",
+    "utm_content",
+    "utm_medium",
+    "utm_source",
+    "utm_term",
+    "ved",
+}
+
+
+def clean_result_url(url: str) -> str:
+    """Remove common tracking parameters while preserving useful query params."""
+    parsed = urlparse(url)
+    if not parsed.query:
+        return url
+    params = [
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if key.lower() not in TRACKING_PARAMS and not key.lower().startswith("utm_")
+    ]
+    return urlunparse(parsed._replace(query=urlencode(params, doseq=True)))
+
+
 def _normalize_url(url: str) -> str:
     """Normalize URL for dedup comparison (strip trailing slash, www, fragments)."""
-    parsed = urlparse(url)
+    parsed = urlparse(clean_result_url(url))
     host = parsed.hostname or ""
     host = re.sub(r"^www\.", "", host)
     path = parsed.path.rstrip("/")
@@ -40,7 +73,7 @@ def deduplicate(raw_results: list[dict]) -> list[SearchResult]:
     seen: dict[str, dict] = {}
 
     for r in raw_results:
-        url = r.get("url", "")
+        url = clean_result_url(r.get("url", ""))
         if not url:
             continue
 
@@ -91,7 +124,7 @@ def deduplicate_with_scoring(raw_results: list[dict]) -> list[SearchResult]:
     seen: dict[str, dict] = {}
     
     for i, r in enumerate(raw_results):
-        url = r.get("url", "")
+        url = clean_result_url(r.get("url", ""))
         if not url:
             continue
 
