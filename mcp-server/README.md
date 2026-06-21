@@ -26,12 +26,18 @@ Built on [AgentSearch](https://github.com/brcrusoe72/agent-search), which wraps 
 
 | Tool | Description |
 |------|-------------|
-| `search` | SearXNG-backed web search with optional content extraction |
+| `health` | Check API, SearXNG, and live search health |
+| `engines` | List configured SearXNG engines |
+| `search` | SearXNG-backed web search with engine, domain, exclusion, and extraction controls |
+| `search_extract` | Search and extract readable content from top results |
 | `deep_search` | Multi-query fusion — generates 3-5 query variations and merges results |
+| `policy_search` | Policy/geopolitical search with source-library and domain-quality ranking |
+| `source_search` | Trace primary sources across curated institutions |
+| `source_institutions` | List curated source registry institutions |
 | `read_url` | Extract content from any URL using a 9-strategy kill chain |
 | `read_batch` | Batch extract content from up to 20 URLs concurrently |
-| `news` | Structured news search using enabled SearXNG news engines |
-| `search_jobs` | Job board search across multiple job sites |
+| `news` | Structured news search using enabled or explicitly selected SearXNG news engines |
+| `search_jobs` | Job board search with location and salary filters |
 
 ## Prerequisites
 

@@ -203,6 +203,9 @@ class AgentSearch:
             cached=m.get("cached", False),
             response_time_ms=m.get("response_time_ms", 0.0),
             queries_used=m.get("queries_used"),
+            upstream_status=m.get("upstream_status", "ok"),
+            upstream_errors=m.get("upstream_errors", []),
+            unresponsive_engines=m.get("unresponsive_engines", []),
         )
 
     @staticmethod
@@ -496,5 +499,9 @@ class AgentSearch:
         return HealthResponse(
             status=data.get("status", ""),
             searxng_available=data.get("searxng_available", False),
+            search_available=data.get("search_available", False),
+            upstream_status=data.get("upstream_status", "unknown"),
+            upstream_errors=data.get("upstream_errors", []),
+            unresponsive_engines=data.get("unresponsive_engines", []),
             version=data.get("version", ""),
         )

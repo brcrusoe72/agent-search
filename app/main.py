@@ -30,6 +30,7 @@ import asyncio
 import secrets
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import AsyncGenerator
 from urllib.parse import urlparse
 
@@ -70,6 +71,10 @@ import logging
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://searxng:8080")
 CACHE_TTL = int(os.getenv("CACHE_TTL", "3600"))
 VERSION = "2.0.0"
+HEALTHCHECK_QUERY = os.getenv("HEALTHCHECK_QUERY", "python programming language")
+HEALTHCHECK_ENGINES = os.getenv("HEALTHCHECK_ENGINES", "github")
+HEALTHCHECK_SEARCH_TIMEOUT = float(os.getenv("HEALTHCHECK_SEARCH_TIMEOUT", "15"))
+HEALTHCHECK_CACHE_TTL = float(os.getenv("HEALTHCHECK_CACHE_TTL", "15"))
 
 # Request logging
 logging.basicConfig(
@@ -89,6 +94,7 @@ cache = Cache(ttl=CACHE_TTL)
 content_cache: ContentCache | None = None
 evolver: Evolver | None = None
 http_client: httpx.AsyncClient | None = None
+_health_cache: tuple[float, HealthResponse] | None = None
 
 
 @asynccontextmanager
@@ -220,12 +226,112 @@ async def rate_limit_middleware(request, call_next):
 # Helpers
 # ---------------------------------------------------------------------------
 
+@dataclass
+class SearxngQueryResponse:
+    """SearXNG response plus diagnostics that should survive API shaping."""
+
+    results: list[dict]
+    upstream_status: str = "ok"
+    upstream_errors: list[str] | None = None
+    unresponsive_engines: list[str] | None = None
+
+    def __post_init__(self) -> None:
+        if self.upstream_errors is None:
+            self.upstream_errors = []
+        if self.unresponsive_engines is None:
+            self.unresponsive_engines = []
+
+
+def _append_unique(values: list[str], value: object) -> None:
+    text = _safe_log_value(value, limit=500).strip()
+    if text and text not in values:
+        values.append(text)
+
+
+def _format_upstream_error(value: object) -> str:
+    if isinstance(value, dict):
+        engine = value.get("engine") or value.get("name") or value.get("engine_name")
+        error = value.get("error") or value.get("exception") or value.get("message") or value.get("reason")
+        if engine and error:
+            return f"{engine}: {error}"
+        if engine:
+            return str(engine)
+        if error:
+            return str(error)
+    if isinstance(value, (list, tuple)):
+        parts = [str(part) for part in value if part not in (None, "")]
+        return ": ".join(parts)
+    return str(value)
+
+
+def _normalize_upstream_diagnostics(data: dict) -> tuple[list[str], list[str]]:
+    unresponsive_engines: list[str] = []
+    upstream_errors: list[str] = []
+
+    raw_unresponsive = data.get("unresponsive_engines") or []
+    if not isinstance(raw_unresponsive, list):
+        raw_unresponsive = [raw_unresponsive]
+
+    for item in raw_unresponsive:
+        if isinstance(item, dict):
+            engine = item.get("engine") or item.get("name") or item.get("engine_name")
+        elif isinstance(item, (list, tuple)) and item:
+            engine = item[0]
+        else:
+            engine = item
+        _append_unique(unresponsive_engines, engine)
+        _append_unique(upstream_errors, _format_upstream_error(item))
+
+    raw_errors = data.get("errors") or data.get("error") or []
+    if isinstance(raw_errors, (str, dict)):
+        raw_errors = [raw_errors]
+    if isinstance(raw_errors, list):
+        for item in raw_errors:
+            _append_unique(upstream_errors, _format_upstream_error(item))
+
+    return unresponsive_engines, upstream_errors
+
+
+def _upstream_metadata(*responses: SearxngQueryResponse) -> dict:
+    unresponsive_engines: list[str] = []
+    upstream_errors: list[str] = []
+    statuses = [response.upstream_status for response in responses]
+
+    for response in responses:
+        for engine in response.unresponsive_engines or []:
+            _append_unique(unresponsive_engines, engine)
+        for error in response.upstream_errors or []:
+            _append_unique(upstream_errors, error)
+
+    if any(status == "error" for status in statuses):
+        upstream_status = "error"
+    elif any(status == "degraded" for status in statuses):
+        upstream_status = "degraded"
+    else:
+        upstream_status = "ok"
+
+    return {
+        "upstream_status": upstream_status,
+        "upstream_errors": upstream_errors,
+        "unresponsive_engines": unresponsive_engines,
+    }
+
+
+def _upstream_error_response(exc: Exception) -> SearxngQueryResponse:
+    return SearxngQueryResponse(
+        results=[],
+        upstream_status="error",
+        upstream_errors=[f"SearXNG error: {_safe_log_value(exc)}"],
+    )
+
+
 async def _query_searxng(
     query: str,
     count: int = 10,
     engines: str | None = None,
     categories: str | None = None,
-) -> list[dict]:
+    timeout: float | None = None,
+) -> SearxngQueryResponse:
     """Query SearXNG and return raw results."""
     assert http_client is not None
     params: dict = {"q": query, "format": "json", "pageno": 1}
@@ -233,10 +339,20 @@ async def _query_searxng(
         params["engines"] = engines
     if categories:
         params["categories"] = categories
-    resp = await http_client.get(f"{SEARXNG_URL}/search", params=params)
+    request_kwargs = {"params": params}
+    if timeout is not None:
+        request_kwargs["timeout"] = timeout
+    resp = await http_client.get(f"{SEARXNG_URL}/search", **request_kwargs)
     resp.raise_for_status()
     data = resp.json()
-    return data.get("results", [])[:count * 3]
+    unresponsive_engines, upstream_errors = _normalize_upstream_diagnostics(data)
+    upstream_status = "degraded" if unresponsive_engines or upstream_errors else "ok"
+    return SearxngQueryResponse(
+        results=data.get("results", [])[:count * 3],
+        upstream_status=upstream_status,
+        upstream_errors=upstream_errors,
+        unresponsive_engines=unresponsive_engines,
+    )
 
 
 def _normalize_domain_filter(value: str) -> str:
@@ -258,6 +374,13 @@ def _hostname_matches(hostname: str, domain: str) -> bool:
     if not hostname or not domain:
         return False
     return hostname == domain or hostname.endswith(f".{domain}")
+
+
+def _domain_scoped_query(query: str, domain: str) -> str:
+    site_clause = f"site:{domain}"
+    if re.search(rf"(?i)(^|\s){re.escape(site_clause)}(\s|$)", query):
+        return query
+    return f"{site_clause} {query}"
 
 
 # =========================================================================
@@ -289,12 +412,18 @@ async def search(
         cached_resp.meta.response_time_ms = round((time.time() - start) * 1000, 1)
         return cached_resp
 
+    query_text = q
+    if domain:
+        include_domain = _normalize_domain_filter(domain)
+        if include_domain:
+            query_text = _domain_scoped_query(q, include_domain)
+
     try:
-        raw = await _query_searxng(q, count * 2, engines)
+        upstream = await _query_searxng(query_text, count * 2, engines)
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"SearXNG error: {e}")
 
-    results = deduplicate_with_scoring(raw)
+    results = deduplicate_with_scoring(upstream.results)
 
     if domain:
         include_domain = _normalize_domain_filter(domain)
@@ -341,6 +470,8 @@ async def search(
             engines_used=engines_used,
             cached=False,
             response_time_ms=elapsed,
+            queries_used=[query_text] if query_text != q else None,
+            **_upstream_metadata(upstream),
         ),
     )
 
@@ -371,18 +502,17 @@ async def search_deep(
 
     query_variations = generate_query_variations(q)
 
-    async def _search_one(query: str) -> list[dict]:
+    async def _search_one(query: str) -> SearxngQueryResponse:
         try:
             return await _query_searxng(query, count)
-        except httpx.HTTPError:
-            return []
+        except httpx.HTTPError as exc:
+            return _upstream_error_response(exc)
 
     all_raw = await asyncio.gather(*[_search_one(v) for v in query_variations])
 
     combined = []
-    for result_set in all_raw:
-        if isinstance(result_set, list):
-            combined.extend(result_set)
+    for upstream in all_raw:
+        combined.extend(upstream.results)
 
     results = deduplicate_with_scoring(combined)[:count]
 
@@ -400,6 +530,7 @@ async def search_deep(
             cached=False,
             response_time_ms=elapsed,
             queries_used=query_variations,
+            **_upstream_metadata(*all_raw),
         ),
     )
 
@@ -450,18 +581,17 @@ async def search_policy(
     enhanced_queries.append(f"{q} CSIS RAND Brookings CFR")
 
     # Step 3: Run searches
-    async def _search_one(query: str) -> list[dict]:
+    async def _search_one(query: str) -> SearxngQueryResponse:
         try:
             return await _query_searxng(query, count * 2)
-        except httpx.HTTPError:
-            return []
+        except httpx.HTTPError as exc:
+            return _upstream_error_response(exc)
 
     all_raw = await asyncio.gather(*[_search_one(v) for v in enhanced_queries])
 
     combined = []
-    for result_set in all_raw:
-        if isinstance(result_set, list):
-            combined.extend(result_set)
+    for upstream in all_raw:
+        combined.extend(upstream.results)
 
     results = deduplicate_with_scoring(combined)
 
@@ -521,6 +651,7 @@ async def search_policy(
             cached=False,
             response_time_ms=elapsed,
             queries_used=enhanced_queries,
+            **_upstream_metadata(*all_raw),
         ),
     )
 
@@ -725,7 +856,7 @@ async def news(
     news_engines = engines or NEWS_ENGINES
 
     try:
-        raw = await _query_searxng(q, count * 3, engines=news_engines, categories="news")
+        upstream = await _query_searxng(q, count * 3, engines=news_engines, categories="news")
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"SearXNG error: {e}")
 
@@ -733,7 +864,7 @@ async def news(
     seen_urls: set[str] = set()
     results: list[NewsResult] = []
 
-    for r in raw:
+    for r in upstream.results:
         url = r.get("url", "")
         if not url or url in seen_urls:
             continue
@@ -779,6 +910,7 @@ async def news(
             engines_used=engines_used,
             cached=False,
             response_time_ms=elapsed,
+            **_upstream_metadata(upstream),
         ),
     )
 
@@ -860,14 +992,16 @@ async def search_jobs(
     ]
     location_str = f" {location}" if location else ""
     all_raw: list[dict] = []
+    upstream_responses: list[SearxngQueryResponse] = []
 
     for site in job_sites:
         query = f"{q}{location_str} {site}"
         try:
-            raw = await _query_searxng(query, count=10)
-            all_raw.extend(raw)
-        except httpx.HTTPError:
-            continue
+            upstream = await _query_searxng(query, count=10)
+        except httpx.HTTPError as exc:
+            upstream = _upstream_error_response(exc)
+        upstream_responses.append(upstream)
+        all_raw.extend(upstream.results)
 
     results: list[JobResult] = []
     seen_urls: set[str] = set()
@@ -904,14 +1038,22 @@ async def search_jobs(
         )
 
     elapsed = round((time.time() - start) * 1000, 1)
+    engines_used = []
+    for r in all_raw:
+        raw_engines = r.get("engines", [])
+        if isinstance(raw_engines, str):
+            raw_engines = [raw_engines]
+        for engine in raw_engines:
+            _append_unique(engines_used, engine)
 
     return JobSearchResponse(
         results=results,
         meta=SearchMeta(
             query=q,
             total=len(results),
-            engines_used=["google", "bing", "duckduckgo"],
+            engines_used=engines_used,
             response_time_ms=elapsed,
+            **_upstream_metadata(*upstream_responses),
         ),
     )
 
@@ -922,19 +1064,50 @@ async def search_jobs(
 
 @app.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
-    """Health check — verifies SearXNG connectivity."""
+    """Health check — verifies SearXNG and live search connectivity."""
+    global _health_cache
     assert http_client is not None
+    now = time.time()
+    if _health_cache and now - _health_cache[0] < HEALTHCHECK_CACHE_TTL:
+        return _health_cache[1]
+
+    searxng_ok = False
+    search_available = False
+    upstream = SearxngQueryResponse(results=[], upstream_status="unknown")
+
     try:
         resp = await http_client.get(f"{SEARXNG_URL}/healthz", timeout=5.0)
         searxng_ok = resp.status_code == 200
-    except Exception:
-        searxng_ok = False
+    except Exception as exc:
+        upstream = _upstream_error_response(exc)
 
-    return HealthResponse(
-        status="healthy" if searxng_ok else "degraded",
+    if searxng_ok:
+        try:
+            upstream = await _query_searxng(
+                HEALTHCHECK_QUERY,
+                count=1,
+                engines=HEALTHCHECK_ENGINES or None,
+                timeout=HEALTHCHECK_SEARCH_TIMEOUT,
+            )
+            search_available = bool(upstream.results)
+            if not search_available and upstream.upstream_status == "ok":
+                upstream.upstream_status = "degraded"
+                upstream.upstream_errors.append("Health search returned no results")
+        except Exception as exc:
+            upstream = _upstream_error_response(exc)
+
+    upstream_meta = _upstream_metadata(upstream)
+    status = "healthy" if searxng_ok and search_available and upstream_meta["upstream_status"] == "ok" else "degraded"
+
+    response = HealthResponse(
+        status=status,
         searxng_available=searxng_ok,
+        search_available=search_available,
         version=VERSION,
+        **upstream_meta,
     )
+    _health_cache = (now, response)
+    return response
 
 
 @app.get("/engines", response_model=list[EngineInfo])
