@@ -76,7 +76,7 @@ results = client.search("site reliability", domain="google.com")
 
 ### `client.search_strategy(query, *, mode="general", count=10, domain=None, exclude_domains=None, fetch=False)`
 
-Named strategy search. Modes are `general`, `code`, `academic`, `news`, and `private`. Code and academic modes use direct no-key providers where available, while broad web/news engines still run through the configured AgentSearch/SearXNG stack.
+Named strategy search. Modes are `general`, `code`, `academic`, `news`, `private`, `reference`, and `community`. Code, academic, reference, and community modes use direct no-key providers where available, while broad web/news engines still run through the configured AgentSearch/SearXNG stack. Reddit remains best-effort and is not selected by default because live anonymous requests are often blocked.
 
 ```python
 results = client.search_strategy("fetch api", mode="code", count=5)
@@ -148,7 +148,7 @@ print(f"Success: {results.successful}/{results.total}")
 
 ### `client.news(query, *, count=10, engines=None)`
 
-Search news across 9+ engines (Google News, Bing News, Reuters, Yahoo, Brave, etc.).
+Search news across the default reliable news pack (Reuters, Bing News, DuckDuckGo News, Wikinews) or explicitly selected SearXNG news engines.
 
 ```python
 articles = client.news("AI agents", count=10)
@@ -178,6 +178,25 @@ Check API health and SearXNG connectivity.
 ```python
 h = client.health()
 print(f"Status: {h.status}, Version: {h.version}")
+```
+
+### `client.providers_health()`
+
+Summarize provider health from recorded live attempts.
+
+```python
+health = client.providers_health()
+print(health["status"])
+```
+
+### `client.providers_stats()`
+
+Return rolling in-memory telemetry for direct providers and SearXNG packs.
+
+```python
+stats = client.providers_stats()
+for provider in stats["providers"]:
+    print(provider["source"], provider["name"], provider["success_rate"])
 ```
 
 ---
