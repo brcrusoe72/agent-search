@@ -28,7 +28,8 @@ Built on [AgentSearch](https://github.com/brcrusoe72/agent-search), which wraps 
 |------|-------------|
 | `health` | Check API, SearXNG, and live search health |
 | `engines` | List configured SearXNG engines |
-| `search` | SearXNG-backed web search with engine, domain, exclusion, and extraction controls |
+| `search` | SearXNG-backed web search with engine/mode, domain, exclusion, and extraction controls |
+| `search_strategy` | Named mode search: general, code, academic, news, private |
 | `search_extract` | Search and extract readable content from top results |
 | `deep_search` | Multi-query fusion — generates 3-5 query variations and merges results |
 | `policy_search` | Policy/geopolitical search with source-library and domain-quality ranking |

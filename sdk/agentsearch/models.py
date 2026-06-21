@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Any, List, Optional
 
 
 @dataclass
@@ -29,6 +29,9 @@ class SearchMeta:
     cached: bool = False
     response_time_ms: float = 0.0
     queries_used: Optional[List[str]] = None
+    mode: Optional[str] = None
+    engine_attempts: List[dict[str, Any]] = field(default_factory=list)
+    fallback_reason: Optional[str] = None
     upstream_status: str = "ok"
     upstream_errors: List[str] = field(default_factory=list)
     unresponsive_engines: List[str] = field(default_factory=list)

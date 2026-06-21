@@ -28,6 +28,9 @@ class SearchMeta(BaseModel):
     cached: bool = False
     response_time_ms: float = 0.0
     queries_used: list[str] | None = Field(None, description="For multi-query fusion")
+    mode: str | None = Field(None, description="Named search strategy mode")
+    engine_attempts: list[dict] = Field(default_factory=list, description="Strategy engine packs attempted")
+    fallback_reason: str | None = Field(None, description="Why a later strategy pack was attempted")
     upstream_status: str = Field("ok", description="ok | degraded | error")
     upstream_errors: list[str] = Field(default_factory=list, description="SearXNG/backend errors")
     unresponsive_engines: list[str] = Field(default_factory=list, description="Engines SearXNG reported as unresponsive")
