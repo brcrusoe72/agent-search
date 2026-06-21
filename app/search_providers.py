@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from html import unescape
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin
 
 import httpx
 
@@ -81,6 +81,13 @@ def provider_by_name(name: str) -> SearchProvider:
         raise ValueError(f"Unknown provider: {name}") from exc
 
 
+def providers_catalog() -> list[dict[str, str]]:
+    return [
+        {"name": name, "engine_name": provider.engine_name}
+        for name, provider in sorted(PROVIDERS.items())
+    ]
+
+
 def _safe_text(value: object, limit: int = 1000) -> str:
     text = "" if value is None else str(value)
     text = re.sub(r"\s+", " ", text).strip()
@@ -106,6 +113,31 @@ def _json_items(data: Any, *path: str) -> list:
             return []
         current = current.get(key)
     return current if isinstance(current, list) else []
+
+
+def _html_attr(tag: str, attr: str) -> str:
+    match = re.search(rf"\b{re.escape(attr)}\s*=\s*([\"'])(.*?)\1", tag, flags=re.IGNORECASE | re.DOTALL)
+    return _safe_text(unescape(match.group(2)), limit=500) if match else ""
+
+
+def _html_anchors_with_class(html: str, class_name: str) -> list[tuple[str, str]]:
+    anchors: list[tuple[str, str]] = []
+    for match in re.finditer(r"(<a\b[^>]*>)(.*?)</a>", html, flags=re.IGNORECASE | re.DOTALL):
+        tag, body = match.groups()
+        classes = _html_attr(tag, "class").split()
+        if class_name in classes:
+            anchors.append((tag, body))
+    return anchors
+
+
+def _html_class_text(html: str, class_name: str) -> str:
+    class_pattern = re.escape(class_name)
+    match = re.search(
+        rf"<[^>]*\bclass\s*=\s*([\"'])[^\"']*\b{class_pattern}\b[^\"']*\1[^>]*>(.*?)</[^>]+>",
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return _clean_snippet(match.group(2)) if match else ""
 
 
 def _abstract_from_openalex_index(index: object) -> str:
@@ -220,6 +252,193 @@ class DockerHubProvider(SearchProvider):
             if isinstance(pulls, int):
                 snippet = f"{snippet} Pulls: {pulls}".strip()
             results.append(self._result(repo_name, url, snippet))
+        return results
+
+
+class PyPIProvider(SearchProvider):
+    name = "pypi"
+    engine_name = "pypi"
+
+    async def _search(self, client: httpx.AsyncClient, query: str, count: int) -> list[dict]:
+        resp = await client.get(
+            "https://pypi.org/search/",
+            params={"q": query},
+            headers=DEFAULT_PROVIDER_HEADERS,
+            timeout=self.timeout,
+        )
+        resp.raise_for_status()
+
+        results: list[dict] = []
+        for tag, block in _html_anchors_with_class(resp.text, "package-snippet"):
+            href = _html_attr(tag, "href")
+            if not href.startswith("/project/"):
+                continue
+            package_name = _html_class_text(block, "package-snippet__name")
+            if not package_name:
+                continue
+            version = _html_class_text(block, "package-snippet__version")
+            description = _html_class_text(block, "package-snippet__description")
+            snippet = description
+            if version:
+                snippet = f"{snippet} Version: {version}".strip()
+            results.append(
+                self._result(
+                    package_name,
+                    urljoin("https://pypi.org", href),
+                    snippet,
+                )
+            )
+            if len(results) >= count * 3:
+                break
+        return results
+
+
+class WikipediaProvider(SearchProvider):
+    name = "wikipedia"
+    engine_name = "wikipedia"
+
+    async def _search(self, client: httpx.AsyncClient, query: str, count: int) -> list[dict]:
+        resp = await client.get(
+            "https://en.wikipedia.org/w/api.php",
+            params={
+                "action": "query",
+                "list": "search",
+                "srsearch": query,
+                "srlimit": min(max(count * 3, 1), 50),
+                "format": "json",
+                "utf8": "1",
+                "origin": "*",
+            },
+            headers=DEFAULT_PROVIDER_HEADERS,
+            timeout=self.timeout,
+        )
+        resp.raise_for_status()
+        results: list[dict] = []
+        query_data = resp.json().get("query")
+        search_items = query_data.get("search") if isinstance(query_data, dict) else []
+        if not isinstance(search_items, list):
+            return []
+        for item in search_items[: count * 3]:
+            if not isinstance(item, dict):
+                continue
+            title = _safe_text(item.get("title"))
+            if not title:
+                continue
+            page_id = item.get("pageid")
+            url = f"https://en.wikipedia.org/?curid={page_id}" if page_id else f"https://en.wikipedia.org/wiki/{quote(title.replace(' ', '_'))}"
+            results.append(self._result(title, url, item.get("snippet") or ""))
+        return results
+
+
+class WikidataProvider(SearchProvider):
+    name = "wikidata"
+    engine_name = "wikidata"
+
+    async def _search(self, client: httpx.AsyncClient, query: str, count: int) -> list[dict]:
+        resp = await client.get(
+            "https://www.wikidata.org/w/api.php",
+            params={
+                "action": "wbsearchentities",
+                "search": query,
+                "language": "en",
+                "format": "json",
+                "limit": min(max(count * 3, 1), 50),
+                "origin": "*",
+            },
+            headers=DEFAULT_PROVIDER_HEADERS,
+            timeout=self.timeout,
+        )
+        resp.raise_for_status()
+        search_items = resp.json().get("search")
+        if not isinstance(search_items, list):
+            return []
+        results: list[dict] = []
+        for item in search_items[: count * 3]:
+            if not isinstance(item, dict):
+                continue
+            entity_id = _safe_text(item.get("id"))
+            label = item.get("label") or entity_id
+            url = _safe_text(item.get("concepturi")) or f"https://www.wikidata.org/wiki/{quote(entity_id)}"
+            if not entity_id or not url:
+                continue
+            aliases = item.get("aliases") if isinstance(item.get("aliases"), list) else []
+            alias_text = f" Aliases: {', '.join(str(alias) for alias in aliases[:5])}" if aliases else ""
+            results.append(self._result(label, url, f"{item.get('description') or ''}{alias_text}"))
+        return results
+
+
+class HackerNewsProvider(SearchProvider):
+    name = "hackernews"
+    engine_name = "hackernews"
+
+    async def _search(self, client: httpx.AsyncClient, query: str, count: int) -> list[dict]:
+        resp = await client.get(
+            "https://hn.algolia.com/api/v1/search",
+            params={
+                "query": query,
+                "tags": "story",
+                "hitsPerPage": min(max(count * 3, 1), 50),
+            },
+            headers=DEFAULT_PROVIDER_HEADERS,
+            timeout=self.timeout,
+        )
+        resp.raise_for_status()
+        results: list[dict] = []
+        for item in _json_items(resp.json(), "hits")[: count * 3]:
+            if not isinstance(item, dict):
+                continue
+            object_id = _safe_text(item.get("objectID"))
+            url = _safe_text(item.get("url")) or f"https://news.ycombinator.com/item?id={quote(object_id)}"
+            title = item.get("title") or item.get("story_title") or url
+            points = item.get("points")
+            comments = item.get("num_comments")
+            metrics = []
+            if isinstance(points, int):
+                metrics.append(f"Points: {points}")
+            if isinstance(comments, int):
+                metrics.append(f"Comments: {comments}")
+            results.append(self._result(title, url, " ".join(metrics)))
+        return results
+
+
+class RedditProvider(SearchProvider):
+    name = "reddit"
+    engine_name = "reddit"
+
+    async def _search(self, client: httpx.AsyncClient, query: str, count: int) -> list[dict]:
+        resp = await client.get(
+            "https://www.reddit.com/search.json",
+            params={
+                "q": query,
+                "limit": min(max(count * 3, 1), 50),
+                "sort": "relevance",
+                "t": "all",
+                "restrict_sr": "false",
+            },
+            headers={
+                **DEFAULT_PROVIDER_HEADERS,
+                "User-Agent": "AgentSearch/2.0 search provider (+https://github.com/brcrusoe72/agent-search)",
+            },
+            timeout=self.timeout,
+        )
+        resp.raise_for_status()
+        results: list[dict] = []
+        for child in _json_items(resp.json(), "data", "children")[: count * 3]:
+            if not isinstance(child, dict) or not isinstance(child.get("data"), dict):
+                continue
+            item = child["data"]
+            permalink = _safe_text(item.get("permalink"))
+            url = f"https://www.reddit.com{permalink}" if permalink.startswith("/") else _safe_text(item.get("url"))
+            if not url:
+                continue
+            subreddit = item.get("subreddit_name_prefixed") or item.get("subreddit") or ""
+            score = item.get("score")
+            snippet = item.get("selftext") or item.get("url") or ""
+            if subreddit:
+                snippet = f"{subreddit}. {snippet}".strip()
+            if isinstance(score, int):
+                snippet = f"{snippet} Score: {score}".strip()
+            results.append(self._result(item.get("title") or url, url, snippet))
         return results
 
 
@@ -341,6 +560,11 @@ PROVIDERS: dict[str, SearchProvider] = {
     "mdn": MDNProvider(),
     "github": GitHubProvider(),
     "docker_hub": DockerHubProvider(),
+    "pypi": PyPIProvider(),
+    "wikipedia": WikipediaProvider(),
+    "wikidata": WikidataProvider(),
+    "hackernews": HackerNewsProvider(),
+    "reddit": RedditProvider(),
     "arxiv": ArxivProvider(),
     "crossref": CrossrefProvider(),
     "openalex": OpenAlexProvider(),

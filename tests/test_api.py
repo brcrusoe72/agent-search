@@ -138,6 +138,11 @@ class EngineAwareFakeSearxngClient:
         self.mdn_params: list[dict] = []
         self.github_params: list[dict] = []
         self.docker_hub_params: list[dict] = []
+        self.pypi_params: list[dict] = []
+        self.wikipedia_params: list[dict] = []
+        self.wikidata_params: list[dict] = []
+        self.hackernews_params: list[dict] = []
+        self.reddit_params: list[dict] = []
         self.arxiv_params: list[dict] = []
         self.crossref_params: list[dict] = []
         self.openalex_params: list[dict] = []
@@ -177,6 +182,70 @@ class EngineAwareFakeSearxngClient:
                         "pull_count": 1000000,
                     }
                 ]
+            })
+        if url.startswith("https://pypi.org/search/"):
+            self.pypi_params.append(dict(params or {}))
+            return FakeResponse({}, text="""
+                <a class="package-snippet" href="/project/fastapi/">
+                  <span class="package-snippet__name">fastapi</span>
+                  <span class="package-snippet__version">1.0.0</span>
+                  <p class="package-snippet__description">FastAPI framework</p>
+                </a>
+            """)
+        if url.startswith("https://en.wikipedia.org/w/api.php"):
+            self.wikipedia_params.append(dict(params or {}))
+            return FakeResponse({
+                "query": {
+                    "search": [
+                        {
+                            "title": "Python (programming language)",
+                            "pageid": 23862,
+                            "snippet": "Python is a programming language.",
+                        }
+                    ]
+                }
+            })
+        if url.startswith("https://www.wikidata.org/w/api.php"):
+            self.wikidata_params.append(dict(params or {}))
+            return FakeResponse({
+                "search": [
+                    {
+                        "id": "Q28865",
+                        "label": "Python",
+                        "description": "programming language",
+                        "concepturi": "https://www.wikidata.org/wiki/Q28865",
+                    }
+                ]
+            })
+        if url.startswith("https://hn.algolia.com/api/v1/search"):
+            self.hackernews_params.append(dict(params or {}))
+            return FakeResponse({
+                "hits": [
+                    {
+                        "title": "Python async discussion",
+                        "url": "https://news.ycombinator.com/item?id=1",
+                        "objectID": "1",
+                        "points": 100,
+                        "num_comments": 42,
+                    }
+                ]
+            })
+        if url.startswith("https://www.reddit.com/search.json"):
+            self.reddit_params.append(dict(params or {}))
+            return FakeResponse({
+                "data": {
+                    "children": [
+                        {
+                            "data": {
+                                "title": "Python discussion",
+                                "permalink": "/r/Python/comments/1/example/",
+                                "subreddit_name_prefixed": "r/Python",
+                                "selftext": "Python community discussion",
+                                "score": 123,
+                            }
+                        }
+                    ]
+                }
             })
         if url.startswith("https://export.arxiv.org/api/query"):
             self.arxiv_params.append(dict(params or {}))
@@ -241,6 +310,8 @@ class EngineAwareFakeSearxngClient:
                     {"name": "reuters", "shortcut": "reu", "enabled": True, "categories": ["news"]},
                     {"name": "yahoo news", "shortcut": "yn", "enabled": True, "categories": ["news"]},
                     {"name": "bing news", "shortcut": "bn", "enabled": True, "categories": ["news"]},
+                    {"name": "duckduckgo news", "shortcut": "ddn", "enabled": True, "categories": ["news"]},
+                    {"name": "wikinews", "shortcut": "wn", "enabled": True, "categories": ["news"]},
                     {"name": "bing", "shortcut": "b", "enabled": True, "categories": ["general", "web"]},
                     {"name": "disabled", "shortcut": "off", "enabled": False, "categories": ["general"]},
                 ]
@@ -295,6 +366,13 @@ class EngineAwareFakeSearxngClient:
         return FakeResponse({})
 
 
+class RaisingSearchFakeSearxngClient(EngineAwareFakeSearxngClient):
+    async def get(self, url: str, params: dict | None = None, timeout: float | None = None, **kwargs) -> FakeResponse:
+        if url.endswith("/search"):
+            raise httpx.ReadTimeout("fake timeout")
+        return await super().get(url, params=params, timeout=timeout, **kwargs)
+
+
 class AppClient:
     """Small sync wrapper around ASGITransport for self-contained API tests."""
 
@@ -318,6 +396,7 @@ def isolated_app_state(monkeypatch: pytest.MonkeyPatch, tmp_path):
     monkeypatch.setattr(main, "query_db", QueryDatabase(str(tmp_path / "query_log.db")))
     main._rate_store.clear()
     main._global_timestamps.clear()
+    main._provider_attempt_stats.clear()
     yield
 
 
@@ -488,14 +567,14 @@ def test_search_strategy_general_falls_back_to_non_bing_pack(monkeypatch: pytest
     data = response.json()
     assert [params["engines"] for params in fake.search_params] == [
         "bing",
-        "duckduckgo,brave,google,startpage",
+        "duckduckgo,brave",
     ]
     assert data["meta"]["fallback_reason"] == "no_results"
-    assert data["meta"]["engine_attempts"][1]["engines"] == ["duckduckgo", "brave", "google", "startpage"]
+    assert data["meta"]["engine_attempts"][1]["engines"] == ["duckduckgo", "brave"]
     assert "bing" not in data["meta"]["engines_used"]
 
 
-def test_search_strategy_code_uses_github_mdn_and_docker_hub(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
+def test_search_strategy_code_uses_direct_code_providers(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
     fake = EngineAwareFakeSearxngClient()
     monkeypatch.setattr(main, "http_client", fake)
 
@@ -507,14 +586,50 @@ def test_search_strategy_code_uses_github_mdn_and_docker_hub(monkeypatch: pytest
     assert fake.github_params[0]["q"] == "fetch api"
     assert fake.mdn_params == [{"q": "fetch api", "locale": "en-US"}]
     assert fake.docker_hub_params[0]["query"] == "fetch api"
+    assert fake.pypi_params == [{"q": "fetch api"}]
     assert [attempt["engines"] for attempt in data["meta"]["engine_attempts"]] == [
         ["github"],
         ["mdn"],
         ["docker hub"],
+        ["pypi"],
     ]
-    assert {"github", "mdn", "docker hub"}.issubset(set(data["meta"]["engines_used"]))
+    assert {"github", "mdn", "docker hub", "pypi"}.issubset(set(data["meta"]["engines_used"]))
     assert data["results"][0]["url"] == "https://github.com/python/cpython"
     assert data["meta"]["fallback_reason"] is None
+
+
+def test_search_strategy_reference_uses_wikipedia_and_wikidata(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
+    fake = EngineAwareFakeSearxngClient()
+    monkeypatch.setattr(main, "http_client", fake)
+
+    response = client.get("/search/strategy", params={"q": "Python", "count": 10, "mode": "reference"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert fake.search_params == []
+    assert fake.wikipedia_params[0]["srsearch"] == "Python"
+    assert fake.wikidata_params[0]["search"] == "Python"
+    assert [attempt["engines"] for attempt in data["meta"]["engine_attempts"]] == [
+        ["wikipedia"],
+        ["wikidata"],
+    ]
+    assert {"wikipedia", "wikidata"}.issubset(set(data["meta"]["engines_used"]))
+
+
+def test_search_strategy_community_uses_hackernews(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
+    fake = EngineAwareFakeSearxngClient()
+    monkeypatch.setattr(main, "http_client", fake)
+
+    response = client.get("/search/strategy", params={"q": "python async", "count": 10, "mode": "community"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert fake.search_params == []
+    assert fake.hackernews_params[0]["query"] == "python async"
+    assert [attempt["engines"] for attempt in data["meta"]["engine_attempts"]] == [
+        ["hackernews"],
+    ]
+    assert "hackernews" in data["meta"]["engines_used"]
 
 
 def test_search_strategy_academic_uses_direct_providers(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
@@ -546,11 +661,75 @@ def test_search_strategy_news_uses_requested_news_pack(monkeypatch: pytest.Monke
     response = client.get("/search", params={"q": "semiconductors", "count": 3, "mode": "news"})
 
     assert response.status_code == 200
-    assert fake.search_params[0]["engines"] == "reuters,yahoo news,bing news"
+    assert fake.search_params[0]["engines"] == "reuters,bing news,duckduckgo news,wikinews"
     assert "categories" not in fake.search_params[0]
     meta = response.json()["meta"]
     assert meta["mode"] == "news"
-    assert meta["engine_attempts"][0]["engines"] == ["reuters", "yahoo news", "bing news"]
+    assert meta["engine_attempts"][0]["engines"] == ["reuters", "bing news", "duckduckgo news", "wikinews"]
+
+
+def test_provider_stats_and_health_record_direct_attempts(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
+    fake = EngineAwareFakeSearxngClient()
+    monkeypatch.setattr(main, "http_client", fake)
+
+    response = client.get("/search/strategy", params={"q": "fetch api", "count": 10, "mode": "code"})
+    assert response.status_code == 200
+
+    stats = client.get("/providers/stats")
+    assert stats.status_code == 200
+    providers = {
+        (row["source"], row["name"]): row
+        for row in stats.json()["providers"]
+    }
+    for name in ["github", "mdn", "docker_hub", "pypi"]:
+        row = providers[("provider", name)]
+        assert row["attempts"] == 1
+        assert row["successes"] == 1
+        assert row["health"] == "healthy"
+
+    health = client.get("/providers/health")
+    assert health.status_code == 200
+    data = health.json()
+    assert data["status"] == "healthy"
+    assert data["attempted"] >= 4
+
+
+def test_search_records_searxng_error_attempt(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
+    monkeypatch.setattr(main, "http_client", RaisingSearchFakeSearxngClient())
+
+    response = client.get("/search", params={"q": "timeout", "count": 1})
+    assert response.status_code == 502
+
+    stats = client.get("/providers/stats")
+    assert stats.status_code == 200
+    providers = {
+        (row["source"], row["name"]): row
+        for row in stats.json()["providers"]
+    }
+    row = providers[("searxng", "default")]
+    assert row["attempts"] == 1
+    assert row["errors"] == 1
+    assert row["health"] == "error"
+    assert "SearXNG error" in row["last_error"]
+
+
+def test_news_records_searxng_error_attempt(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
+    monkeypatch.setattr(main, "http_client", RaisingSearchFakeSearxngClient())
+
+    response = client.get("/news", params={"q": "timeout", "count": 1})
+    assert response.status_code == 502
+
+    stats = client.get("/providers/stats")
+    assert stats.status_code == 200
+    providers = {
+        (row["source"], row["name"]): row
+        for row in stats.json()["providers"]
+    }
+    row = providers[("searxng", main.NEWS_ENGINES)]
+    assert row["attempts"] == 1
+    assert row["errors"] == 1
+    assert row["health"] == "error"
+    assert "SearXNG error" in row["last_error"]
 
 
 def test_domain_filter_does_not_site_scope_non_web_engines(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:

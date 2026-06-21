@@ -90,13 +90,13 @@ AgentSearch delegates engine support to the connected SearXNG instance. The auth
 curl "http://localhost:3939/engines"
 ```
 
-The bundled `searxng/settings.example.yml` explicitly enables 25 engines: Google, Startpage, Brave, Bing, DuckDuckGo, Google Scholar, Semantic Scholar, arXiv, Crossref, OpenAlex, PubMed, Google News, Bing News, Yahoo News, Reuters, Wikinews, Wikipedia, Wikidata, Hugging Face, Reddit, Hacker News, Stack Overflow, GitHub, Docker Hub, and Lobsters.
+The bundled `searxng/settings.example.yml` explicitly enables 25 engines, including best-effort Google/Startpage/Yahoo entries plus Brave, Bing, DuckDuckGo, Google Scholar, Semantic Scholar, arXiv, Crossref, OpenAlex, PubMed, Bing News, Reuters, Wikinews, Wikipedia, Wikidata, Hugging Face, Reddit, Hacker News, Stack Overflow, GitHub, Docker Hub, and Lobsters.
 
 Run `./scripts/prepare-searxng.sh` to create ignored local runtime files at `searxng/settings.yml` and `searxng/settings.tor.yml` with generated SearXNG instance secrets. Do not commit those generated files.
 
 Because SearXNG is configured with `use_default_settings: true`, your live instance may expose additional enabled engines from the installed SearXNG catalog. Use the `engines=` query parameter to request specific engines, and use `/engines` to verify what is available in that deployment.
 
-Strategy modes can also use direct no-key providers for vertical search. These do not require paid search APIs: GitHub repository search, MDN search, Docker Hub search, arXiv, Crossref, OpenAlex, and Semantic Scholar are called directly when a mode selects them. SearXNG remains the broad-web provider for Google/Bing/Brave/DuckDuckGo-style engines.
+Strategy modes can also use direct no-key providers for vertical search. These do not require paid search APIs: GitHub repository search, MDN search, Docker Hub search, PyPI package metadata, Wikipedia, Wikidata, Hacker News, arXiv, Crossref, OpenAlex, and Semantic Scholar are called directly when a mode selects them. SearXNG remains the broad-web provider for Google/Bing/Brave/DuckDuckGo-style engines, but Google, Startpage, Yahoo, and Reddit are best-effort explicit sources rather than defaults because they are commonly blocked or empty.
 
 ## Why not just use SearXNG directly?
 
@@ -119,7 +119,7 @@ SearXNG finds pages. AgentSearch finds pages, reads them, scores them, deduplica
 | Endpoint | Method | What it does |
 |---|---|---|
 | `/search` | GET | Multi-engine web search with deduplication and scoring |
-| `/search/strategy` | GET | Named search modes: general, code, academic, news, private |
+| `/search/strategy` | GET | Named search modes: general, code, academic, news, private, reference, community |
 | `/search/deep` | GET | Server-side query expansion — runs variations in parallel, fuses results |
 | `/search/extract` | GET | Search + inline content extraction in one call |
 | `/search/jobs` | GET | Job search across LinkedIn, Indeed, Glassdoor, ZipRecruiter |
@@ -127,7 +127,7 @@ SearXNG finds pages. AgentSearch finds pages, reads them, scores them, deduplica
 | `/search/sources` | GET | Source discovery with institutional filtering |
 | `/search/sources/institutions` | GET | List source registry institutions |
 | `/search/stats` | GET | Query statistics and cache metrics |
-| `/news` | GET | Structured multi-source news (Google News, Bing News, Yahoo News) |
+| `/news` | GET | Structured multi-source news with reliable defaults and explicit engine overrides |
 
 ### Content extraction
 
@@ -164,6 +164,8 @@ Every request gets SSRF protection, prompt injection detection, paywall detectio
 |---|---|---|
 | `/health` | GET | Health check (API + SearXNG status) |
 | `/engines` | GET | List available search engines and their status |
+| `/providers/health` | GET | Summarize provider health from recorded live attempts |
+| `/providers/stats` | GET | Rolling provider/SearXNG attempt telemetry |
 
 ## Quick examples
 
@@ -180,11 +182,21 @@ Returns search results with extracted content inline — no second round-trip to
 ```bash
 curl "http://localhost:3939/search/strategy?q=fetch+api&mode=code&count=5"
 curl "http://localhost:3939/search?q=AI+regulation&mode=academic&count=5"
+curl "http://localhost:3939/search?q=Python&mode=reference&count=5"
 ```
 
-Modes validate or call only their declared sources instead of falling back silently: `general` tries Bing first and only uses the non-Bing SearXNG pack when needed; `code` uses direct GitHub, MDN, and Docker Hub providers; `academic` uses direct arXiv, Crossref, OpenAlex, and Semantic Scholar providers; `news` uses Reuters, Yahoo News, and Bing News through SearXNG; `private` avoids broad general web engines.
+Modes validate or call only their declared sources instead of falling back silently: `general` tries Bing first, then uses DuckDuckGo/Brave and direct reference/community providers only when more coverage is needed; `code` uses direct GitHub, MDN, Docker Hub, and PyPI providers; `academic` uses direct arXiv, Crossref, OpenAlex, and Semantic Scholar providers; `news` uses Reuters, Bing News, DuckDuckGo News, and Wikinews through SearXNG; `reference` uses direct Wikipedia and Wikidata providers; `community` uses direct Hacker News; `private` avoids broad general web engines.
 
 Each strategy response includes `meta.engine_attempts` with source/provider, query, raw result count, latency, and upstream errors so blocked or empty providers stay visible.
+
+Provider telemetry is available without running another probe:
+
+```bash
+curl "http://localhost:3939/providers/health"
+curl "http://localhost:3939/providers/stats"
+```
+
+Telemetry is in-memory and reflects live attempts since the API process started. It tracks attempts, successes, empty-result rate, errors, latency, last error, and last success per direct provider or SearXNG pack.
 
 ### Deep search (query expansion)
 

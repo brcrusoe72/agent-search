@@ -62,6 +62,16 @@ def make_server(base_url: str, token: str | None = None) -> Server:
                 inputSchema={"type": "object", "properties": {}},
             ),
             Tool(
+                name="providers_stats",
+                description="Return rolling provider and SearXNG attempt telemetry from AgentSearch.",
+                inputSchema={"type": "object", "properties": {}},
+            ),
+            Tool(
+                name="providers_health",
+                description="Summarize provider health from recorded live AgentSearch attempts.",
+                inputSchema={"type": "object", "properties": {}},
+            ),
+            Tool(
                 name="search",
                 description="SearXNG-backed web search with optional engine, strategy mode, domain, exclusion, and fetch controls.",
                 inputSchema={
@@ -70,7 +80,7 @@ def make_server(base_url: str, token: str | None = None) -> Server:
                         "query": {"type": "string", "description": "Search query"},
                         "count": {"type": "integer", "description": "Number of results (default 10)", "default": 10},
                         "engines": {"type": "string", "description": "Comma-separated engine names"},
-                        "mode": {"type": "string", "description": "Named strategy: general, code, academic, news, or private"},
+                        "mode": {"type": "string", "description": "Named strategy: general, code, academic, news, private, reference, or community"},
                         "domain": {"type": "string", "description": "Restrict results to this domain"},
                         "exclude_domains": {"type": "string", "description": "Comma-separated domains to exclude"},
                         "fetch": {"type": "boolean", "description": "Also extract page content from top results", "default": False},
@@ -80,7 +90,7 @@ def make_server(base_url: str, token: str | None = None) -> Server:
             ),
             Tool(
                 name="search_strategy",
-                description="Search with a named engine strategy. Modes: general, code, academic, news, private.",
+                description="Search with a named engine strategy. Modes: general, code, academic, news, private, reference, community.",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -103,7 +113,7 @@ def make_server(base_url: str, token: str | None = None) -> Server:
                         "query": {"type": "string", "description": "Search query"},
                         "count": {"type": "integer", "description": "Number of results (default 5)", "default": 5},
                         "engines": {"type": "string", "description": "Comma-separated engine names"},
-                        "mode": {"type": "string", "description": "Named strategy: general, code, academic, news, or private"},
+                        "mode": {"type": "string", "description": "Named strategy: general, code, academic, news, private, reference, or community"},
                     },
                     "required": ["query"],
                 },
@@ -218,6 +228,12 @@ def make_server(base_url: str, token: str | None = None) -> Server:
 
                 elif name == "engines":
                     r = await client.get("/engines")
+
+                elif name == "providers_stats":
+                    r = await client.get("/providers/stats")
+
+                elif name == "providers_health":
+                    r = await client.get("/providers/health")
 
                 elif name == "search":
                     params = {"q": arguments["query"], "count": arguments.get("count", 10)}

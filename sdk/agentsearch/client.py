@@ -282,7 +282,7 @@ class AgentSearch:
             query: Search query string.
             count: Number of results (1-50).
             engines: Comma-separated engine names.
-            mode: Named search strategy: general, code, academic, news, or private.
+            mode: Named search strategy: general, code, academic, news, private, reference, or community.
             domain: Filter results to this domain.
             exclude_domains: Comma-separated domains to exclude.
             fetch: If True, also extract page content via kill chain.
@@ -347,7 +347,7 @@ class AgentSearch:
             query: Search query string.
             count: Number of results (1-20).
             engines: Comma-separated engine names.
-            mode: Named search strategy: general, code, academic, news, or private.
+            mode: Named search strategy: general, code, academic, news, private, reference, or community.
 
         Returns:
             SearchResponse with results including extracted content.
@@ -541,3 +541,11 @@ class AgentSearch:
             unresponsive_engines=data.get("unresponsive_engines", []),
             version=data.get("version", ""),
         )
+
+    def providers_stats(self) -> Dict[str, Any]:
+        """Return rolling provider and SearXNG attempt telemetry."""
+        return self._get("/providers/stats")
+
+    def providers_health(self) -> Dict[str, Any]:
+        """Return provider health summarized from recorded live attempts."""
+        return self._get("/providers/health")

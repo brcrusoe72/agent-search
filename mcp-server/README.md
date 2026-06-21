@@ -28,8 +28,10 @@ Built on [AgentSearch](https://github.com/brcrusoe72/agent-search), which wraps 
 |------|-------------|
 | `health` | Check API, SearXNG, and live search health |
 | `engines` | List configured SearXNG engines |
+| `providers_health` | Summarize provider health from recorded live attempts |
+| `providers_stats` | Return rolling provider/SearXNG attempt telemetry |
 | `search` | SearXNG-backed web search with engine/mode, domain, exclusion, and extraction controls |
-| `search_strategy` | Named mode search: general, code, academic, news, private |
+| `search_strategy` | Named mode search: general, code, academic, news, private, reference, community |
 | `search_extract` | Search and extract readable content from top results |
 | `deep_search` | Multi-query fusion — generates 3-5 query variations and merges results |
 | `policy_search` | Policy/geopolitical search with source-library and domain-quality ranking |
@@ -74,7 +76,9 @@ Engine availability comes from the AgentSearch API and its connected SearXNG ins
 curl "http://localhost:3939/engines"
 ```
 
-The bundled AgentSearch SearXNG config explicitly enables 23 engines, and `use_default_settings: true` can expose additional engines from the installed SearXNG catalog. Avoid hard-coding a fixed engine count in clients.
+The bundled AgentSearch SearXNG config explicitly enables a focused engine set, and `use_default_settings: true` can expose additional engines from the installed SearXNG catalog. Avoid hard-coding a fixed engine count in clients.
+
+Strategy modes also include direct no-key providers for GitHub, MDN, Docker Hub, PyPI, Wikipedia, Wikidata, Hacker News, arXiv, Crossref, OpenAlex, and Semantic Scholar. Reddit is treated as best-effort because anonymous requests are often blocked. Use `providers_health` and `providers_stats` to inspect which providers are actually returning rows in the current process.
 
 ## Connect from Claude Desktop
 
