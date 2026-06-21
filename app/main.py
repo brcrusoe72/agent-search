@@ -739,6 +739,54 @@ def _filter_search_results(
     return results
 
 
+def _result_key(result: SearchResult) -> str:
+    return result.url.rstrip("/")
+
+
+def _renumber_results(results: list[SearchResult]) -> None:
+    for index, result in enumerate(results, start=1):
+        result.position = index
+
+
+def _ensure_strategy_coverage(
+    ranked_results: list[SearchResult],
+    coverage_groups: list[list[SearchResult]],
+    count: int,
+) -> list[SearchResult]:
+    selected = list(ranked_results[:count])
+    if count <= 1 or not selected:
+        return selected
+
+    selected_keys = {_result_key(result) for result in selected}
+    replace_at = len(selected) - 1
+
+    for group in coverage_groups:
+        if any(_result_key(result) in selected_keys for result in group):
+            continue
+
+        candidate = next((result for result in group if _result_key(result) not in selected_keys), None)
+        if candidate is None:
+            continue
+
+        candidate_key = _result_key(candidate)
+        if len(selected) < count:
+            selected.append(candidate)
+            selected_keys.add(candidate_key)
+            continue
+
+        if replace_at <= 0:
+            break
+
+        removed = selected[replace_at]
+        selected[replace_at] = candidate
+        selected_keys.discard(_result_key(removed))
+        selected_keys.add(candidate_key)
+        replace_at -= 1
+
+    _renumber_results(selected)
+    return selected
+
+
 async def _attach_content(results: list[SearchResult]) -> None:
     if not results:
         return
@@ -786,6 +834,7 @@ async def _search_strategy_impl(
         return cached_resp
 
     combined_raw: list[dict] = []
+    coverage_groups: list[list[SearchResult]] = []
     upstream_responses: list[SearxngQueryResponse] = []
     engine_attempts: list[dict] = []
     queries_used: list[str] = []
@@ -829,6 +878,13 @@ async def _search_strategy_impl(
 
         upstream_responses.append(upstream)
         combined_raw.extend(upstream.results)
+        pack_results = _filter_search_results(
+            deduplicate_with_scoring(upstream.results),
+            domain=domain,
+            exclude_domains=exclude_domains,
+        )
+        if pack_results:
+            coverage_groups.append(pack_results)
         current_results = _filter_search_results(
             deduplicate_with_scoring(combined_raw),
             domain=domain,
@@ -870,11 +926,12 @@ async def _search_strategy_impl(
         if normalized_mode == "general" and index < len(SEARCH_STRATEGY_MODES[normalized_mode]) - 1:
             fallback_reason = "no_results" if not upstream.results else "insufficient_results"
 
-    results = _filter_search_results(
+    ranked_results = _filter_search_results(
         deduplicate_with_scoring(combined_raw),
         domain=domain,
         exclude_domains=exclude_domains,
-    )[:count]
+    )
+    results = _ensure_strategy_coverage(ranked_results, coverage_groups, count)
 
     if fetch:
         await _attach_content(results)
