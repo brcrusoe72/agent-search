@@ -115,31 +115,6 @@ def _json_items(data: Any, *path: str) -> list:
     return current if isinstance(current, list) else []
 
 
-def _html_attr(tag: str, attr: str) -> str:
-    match = re.search(rf"\b{re.escape(attr)}\s*=\s*([\"'])(.*?)\1", tag, flags=re.IGNORECASE | re.DOTALL)
-    return _safe_text(unescape(match.group(2)), limit=500) if match else ""
-
-
-def _html_anchors_with_class(html: str, class_name: str) -> list[tuple[str, str]]:
-    anchors: list[tuple[str, str]] = []
-    for match in re.finditer(r"(<a\b[^>]*>)(.*?)</a>", html, flags=re.IGNORECASE | re.DOTALL):
-        tag, body = match.groups()
-        classes = _html_attr(tag, "class").split()
-        if class_name in classes:
-            anchors.append((tag, body))
-    return anchors
-
-
-def _html_class_text(html: str, class_name: str) -> str:
-    class_pattern = re.escape(class_name)
-    match = re.search(
-        rf"<[^>]*\bclass\s*=\s*([\"'])[^\"']*\b{class_pattern}\b[^\"']*\1[^>]*>(.*?)</[^>]+>",
-        html,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    return _clean_snippet(match.group(2)) if match else ""
-
-
 def _abstract_from_openalex_index(index: object) -> str:
     if not isinstance(index, dict):
         return ""
@@ -160,6 +135,41 @@ def _doi_url(doi: object) -> str:
     if doi_text.startswith("http://") or doi_text.startswith("https://"):
         return doi_text
     return f"https://doi.org/{doi_text}"
+
+
+def _query_tokens(query: str) -> list[str]:
+    tokens: list[str] = []
+    skip = {
+        "a",
+        "an",
+        "and",
+        "api",
+        "for",
+        "in",
+        "library",
+        "module",
+        "package",
+        "packages",
+        "python",
+        "the",
+        "tool",
+        "with",
+    }
+    for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,80}", query):
+        normalized = token.strip("._-").lower()
+        if normalized and normalized not in skip and normalized not in tokens:
+            tokens.append(normalized)
+    return tokens
+
+
+_PYPI_PROJECT_RE = re.compile(r"^[a-z0-9](?:[a-z0-9._-]{0,78}[a-z0-9])?$")
+
+
+def _pypi_json_url(project_name: str) -> httpx.URL | None:
+    if not _PYPI_PROJECT_RE.fullmatch(project_name):
+        return None
+    path = f"/pypi/{project_name}/json"
+    return httpx.URL("https://pypi.org").copy_with(path=path)
 
 
 class MDNProvider(SearchProvider):
@@ -260,34 +270,33 @@ class PyPIProvider(SearchProvider):
     engine_name = "pypi"
 
     async def _search(self, client: httpx.AsyncClient, query: str, count: int) -> list[dict]:
-        resp = await client.get(
-            "https://pypi.org/search/",
-            params={"q": query},
-            headers=DEFAULT_PROVIDER_HEADERS,
-            timeout=self.timeout,
-        )
-        resp.raise_for_status()
-
         results: list[dict] = []
-        for tag, block in _html_anchors_with_class(resp.text, "package-snippet"):
-            href = _html_attr(tag, "href")
-            if not href.startswith("/project/"):
+        for token in _query_tokens(query)[: min(max(count * 2, 1), 12)]:
+            url = _pypi_json_url(token)
+            if url is None:
                 continue
-            package_name = _html_class_text(block, "package-snippet__name")
+            resp = await client.get(
+                url,
+                headers=DEFAULT_PROVIDER_HEADERS,
+                timeout=self.timeout,
+            )
+            if getattr(resp, "status_code", 200) == 404:
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            info = data.get("info") if isinstance(data, dict) else {}
+            if not isinstance(info, dict):
+                continue
+            package_name = _safe_text(info.get("name") or token)
             if not package_name:
                 continue
-            version = _html_class_text(block, "package-snippet__version")
-            description = _html_class_text(block, "package-snippet__description")
-            snippet = description
+            project_url = _safe_text(info.get("package_url")) or f"https://pypi.org/project/{quote(package_name)}/"
+            summary = info.get("summary") or info.get("description") or ""
+            version = info.get("version")
+            snippet = _safe_text(summary, limit=800)
             if version:
                 snippet = f"{snippet} Version: {version}".strip()
-            results.append(
-                self._result(
-                    package_name,
-                    urljoin("https://pypi.org", href),
-                    snippet,
-                )
-            )
+            results.append(self._result(package_name, project_url, snippet))
             if len(results) >= count * 3:
                 break
         return results
