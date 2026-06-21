@@ -33,7 +33,7 @@ from collections import defaultdict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import AsyncGenerator
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import FastAPI, Query, HTTPException
@@ -47,6 +47,7 @@ from app.query_expansion import generate_query_variations
 from app.evolver import Evolver
 from app.source_tracer import trace_sources, get_institution_registry
 from app.database import query_db
+from app.search_providers import provider_by_name
 from app.models import (
     AdaptReportRequest,
     AdaptStatsResponse,
@@ -237,6 +238,7 @@ class SearxngQueryResponse:
     upstream_status: str = "ok"
     upstream_errors: list[str] | None = None
     unresponsive_engines: list[str] | None = None
+    response_time_ms: float = 0.0
 
     def __post_init__(self) -> None:
         if self.upstream_errors is None:
@@ -264,35 +266,49 @@ class EngineSelection:
 
 @dataclass(frozen=True)
 class SearchStrategyPack:
-    """A validated group of engines SearXNG should query together."""
+    """A strategy source: either a SearXNG engine pack or a direct provider."""
 
+    source: str
     engines: tuple[str, ...] = ()
+    provider: str | None = None
     categories: str | None = None
-    source: str = "searxng"
     label: str | None = None
+
+
+def _searxng_pack(*engines: str, categories: str | None = None) -> SearchStrategyPack:
+    return SearchStrategyPack(source="searxng", engines=engines, categories=categories)
+
+
+def _provider_pack(provider: str, label: str | None = None) -> SearchStrategyPack:
+    return SearchStrategyPack(source="provider", provider=provider, label=label or provider)
 
 
 SEARCH_STRATEGY_MODES: dict[str, tuple[SearchStrategyPack, ...]] = {
     "general": (
-        SearchStrategyPack(("bing",)),
-        SearchStrategyPack(("duckduckgo", "brave", "google", "startpage")),
+        _searxng_pack("bing"),
+        _searxng_pack("duckduckgo", "brave", "google", "startpage"),
     ),
     "code": (
-        SearchStrategyPack(("github",)),
-        SearchStrategyPack(source="mdn", label="mdn"),
-        SearchStrategyPack(("docker hub",)),
+        _provider_pack("github", "github"),
+        _provider_pack("mdn", "mdn"),
+        _provider_pack("docker_hub", "docker hub"),
     ),
     "academic": (
-        SearchStrategyPack(("arxiv", "crossref", "openalex", "semantic scholar")),
+        _provider_pack("arxiv", "arxiv"),
+        _provider_pack("crossref", "crossref"),
+        _provider_pack("openalex", "openalex"),
+        _provider_pack("semantic_scholar", "semantic scholar"),
     ),
     "news": (
-        SearchStrategyPack(("reuters", "yahoo news", "bing news")),
+        _searxng_pack("reuters", "yahoo news", "bing news"),
     ),
     "private": (
-        SearchStrategyPack(("github",)),
-        SearchStrategyPack(source="mdn", label="mdn"),
-        SearchStrategyPack(("docker hub",)),
-        SearchStrategyPack(("arxiv", "crossref", "semantic scholar")),
+        _provider_pack("github", "github"),
+        _provider_pack("mdn", "mdn"),
+        _provider_pack("docker_hub", "docker hub"),
+        _provider_pack("arxiv", "arxiv"),
+        _provider_pack("crossref", "crossref"),
+        _provider_pack("semantic_scholar", "semantic scholar"),
     ),
 }
 
@@ -358,9 +374,9 @@ def _upstream_metadata(*responses: SearxngQueryResponse) -> dict:
         for error in response.upstream_errors or []:
             _append_unique(upstream_errors, error)
 
-    if any(status == "error" for status in statuses):
+    if statuses and all(status == "error" for status in statuses):
         upstream_status = "error"
-    elif any(status == "degraded" for status in statuses):
+    elif any(status in {"degraded", "error"} for status in statuses):
         upstream_status = "degraded"
     else:
         upstream_status = "ok"
@@ -480,6 +496,7 @@ async def _query_searxng(
 ) -> SearxngQueryResponse:
     """Query SearXNG and return raw results."""
     assert http_client is not None
+    start = time.monotonic()
     params: dict = {"q": query, "format": "json", "pageno": 1}
     if engines:
         params["engines"] = engines
@@ -498,51 +515,8 @@ async def _query_searxng(
         upstream_status=upstream_status,
         upstream_errors=upstream_errors,
         unresponsive_engines=unresponsive_engines,
+        response_time_ms=round((time.monotonic() - start) * 1000, 1),
     )
-
-
-async def _query_mdn(query: str, count: int = 10) -> SearxngQueryResponse:
-    """Query MDN's search endpoint and shape results like SearXNG rows."""
-    assert http_client is not None
-    try:
-        resp = await http_client.get(
-            "https://developer.mozilla.org/api/v1/search",
-            params={"q": query, "locale": "en-US"},
-            timeout=15.0,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as exc:
-        return SearxngQueryResponse(
-            results=[],
-            upstream_status="error",
-            upstream_errors=[f"mdn: {_safe_log_value(exc)}"],
-        )
-
-    documents = data.get("documents") or data.get("results") or []
-    if not isinstance(documents, list):
-        documents = []
-
-    results: list[dict] = []
-    for item in documents[: count * 3]:
-        if not isinstance(item, dict):
-            continue
-        raw_url = item.get("mdn_url") or item.get("url") or item.get("path") or item.get("slug")
-        if not raw_url:
-            continue
-        url = str(raw_url)
-        if url.startswith("/"):
-            url = urljoin("https://developer.mozilla.org", url)
-        elif not url.startswith(("http://", "https://")):
-            url = urljoin("https://developer.mozilla.org/en-US/docs/", url)
-        results.append({
-            "title": item.get("title") or item.get("slug") or url,
-            "url": url,
-            "content": item.get("summary") or item.get("excerpt") or item.get("description") or "",
-            "engines": ["mdn"],
-        })
-
-    return SearxngQueryResponse(results=results)
 
 
 def _normalize_domain_filter(value: str) -> str:
@@ -658,7 +632,9 @@ async def _search_strategy_impl(
     fallback_reason: str | None = None
 
     for index, pack in enumerate(SEARCH_STRATEGY_MODES[normalized_mode]):
-        engine_selection = await _resolve_engine_selection(",".join(pack.engines)) if pack.engines else None
+        engine_selection = None
+        if pack.source == "searxng":
+            engine_selection = await _resolve_engine_selection(",".join(pack.engines))
         query_text = q
         if domain and pack.source == "searxng":
             include_domain = _normalize_domain_filter(domain)
@@ -667,9 +643,15 @@ async def _search_strategy_impl(
         if query_text != q:
             _append_unique(queries_used, query_text)
 
-        if pack.source == "mdn":
-            upstream = await _query_mdn(query_text, count * 2)
-        else:
+        provider_name: str | None = None
+        if pack.source == "provider":
+            if not pack.provider:
+                raise HTTPException(status_code=500, detail=f"Strategy pack '{pack.label or pack.source}' has no provider")
+            assert http_client is not None
+            provider = provider_by_name(pack.provider)
+            upstream = await provider.search(http_client, query_text, count * 2)
+            provider_name = upstream.provider
+        elif pack.source == "searxng":
             if engine_selection is None:
                 raise HTTPException(status_code=500, detail=f"Strategy pack '{pack.label or pack.source}' has no engines")
             try:
@@ -681,6 +663,9 @@ async def _search_strategy_impl(
                 )
             except httpx.HTTPError as exc:
                 upstream = _upstream_error_response(exc)
+            provider_name = "searxng"
+        else:
+            raise HTTPException(status_code=500, detail=f"Unknown strategy source: {pack.source}")
 
         upstream_responses.append(upstream)
         combined_raw.extend(upstream.results)
@@ -697,12 +682,14 @@ async def _search_strategy_impl(
         engine_attempts.append({
             "mode": normalized_mode,
             "source": pack.source,
+            "provider": provider_name,
             "engines": engine_names,
             "engine_query": engine_selection.value if engine_selection else None,
             "categories": pack.categories,
             "query": query_text,
             "raw_results": len(upstream.results),
             "combined_total": len(current_results),
+            "response_time_ms": getattr(upstream, "response_time_ms", 0.0),
             "upstream_status": upstream.upstream_status,
             "upstream_errors": upstream.upstream_errors or [],
             "unresponsive_engines": upstream.unresponsive_engines or [],

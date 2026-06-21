@@ -96,6 +96,8 @@ Run `./scripts/prepare-searxng.sh` to create ignored local runtime files at `sea
 
 Because SearXNG is configured with `use_default_settings: true`, your live instance may expose additional enabled engines from the installed SearXNG catalog. Use the `engines=` query parameter to request specific engines, and use `/engines` to verify what is available in that deployment.
 
+Strategy modes can also use direct no-key providers for vertical search. These do not require paid search APIs: GitHub repository search, MDN search, Docker Hub search, arXiv, Crossref, OpenAlex, and Semantic Scholar are called directly when a mode selects them. SearXNG remains the broad-web provider for Google/Bing/Brave/DuckDuckGo-style engines.
+
 ## Why not just use SearXNG directly?
 
 SearXNG finds pages. AgentSearch finds pages, reads them, scores them, deduplicates them, caches them, scrubs prompt injections out of them, detects paywalls, falls back through 9 extraction strategies when the first one fails, and gets better at it over time. One API call.
@@ -180,7 +182,9 @@ curl "http://localhost:3939/search/strategy?q=fetch+api&mode=code&count=5"
 curl "http://localhost:3939/search?q=AI+regulation&mode=academic&count=5"
 ```
 
-Modes validate their declared sources instead of falling back silently: `general` tries Bing first and only uses the non-Bing pack when needed; `code` uses GitHub, MDN, and Docker Hub; `academic` uses arXiv, Crossref, OpenAlex, and Semantic Scholar; `news` uses Reuters, Yahoo News, and Bing News; `private` avoids broad general web engines.
+Modes validate or call only their declared sources instead of falling back silently: `general` tries Bing first and only uses the non-Bing SearXNG pack when needed; `code` uses direct GitHub, MDN, and Docker Hub providers; `academic` uses direct arXiv, Crossref, OpenAlex, and Semantic Scholar providers; `news` uses Reuters, Yahoo News, and Bing News through SearXNG; `private` avoids broad general web engines.
+
+Each strategy response includes `meta.engine_attempts` with source/provider, query, raw result count, latency, and upstream errors so blocked or empty providers stay visible.
 
 ### Deep search (query expansion)
 

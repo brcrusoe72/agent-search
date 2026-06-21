@@ -76,7 +76,7 @@ results = client.search("site reliability", domain="google.com")
 
 ### `client.search_strategy(query, *, mode="general", count=10, domain=None, exclude_domains=None, fetch=False)`
 
-Named strategy search. Modes are `general`, `code`, `academic`, `news`, and `private`.
+Named strategy search. Modes are `general`, `code`, `academic`, `news`, and `private`. Code and academic modes use direct no-key providers where available, while broad web/news engines still run through the configured AgentSearch/SearXNG stack.
 
 ```python
 results = client.search_strategy("fetch api", mode="code", count=5)
