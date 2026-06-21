@@ -11,7 +11,9 @@ from __future__ import annotations
 import asyncio
 import os
 import socket
+import sqlite3
 import sys
+import time
 import types
 
 import httpx
@@ -21,6 +23,7 @@ from app import killchain
 from app import main
 from app import browser_renderer
 from app.cache import Cache
+from app.content_cache import ContentCache
 from app.database import QueryDatabase
 from app.dedup import deduplicate_with_scoring
 from adapters import medium as medium_adapter
@@ -1039,6 +1042,94 @@ def test_query_database_async_methods_use_bounded_sqlite(tmp_path) -> None:
     assert stats["total_queries"] == 1
     assert stats["queries_per_engine"] == {"brave": 1, "duckduckgo": 1}
     assert stats["avg_results_per_engine"] == {"brave": 2.0, "duckduckgo": 2.0}
+
+
+def test_content_cache_maintenance_prunes_expired_cache_and_old_fetch_logs(tmp_path) -> None:
+    cache_db = ContentCache(str(tmp_path / "content_cache.db"))
+    now = time.time()
+    old = now - 31 * 86400
+    fresh = now - 5
+
+    with sqlite3.connect(cache_db.db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO content_cache
+            (url_hash, url, content, strategy, chars, created_at, expires_at)
+            VALUES ('expired', 'https://example.com/old', 'old', 'direct', 3, ?, ?)
+            """,
+            (old, old),
+        )
+        conn.execute(
+            """
+            INSERT INTO content_cache
+            (url_hash, url, content, strategy, chars, created_at, expires_at)
+            VALUES ('fresh', 'https://example.com/new', 'new', 'direct', 3, ?, ?)
+            """,
+            (fresh, now + 3600),
+        )
+        conn.execute(
+            """
+            INSERT INTO fetch_log
+            (url, domain, strategy, success, chars, strategies_tried, error, timestamp)
+            VALUES ('https://example.com/old-log', 'example.com', 'direct', 1, 3, 'direct', NULL, ?)
+            """,
+            (old,),
+        )
+        conn.execute(
+            """
+            INSERT INTO fetch_log
+            (url, domain, strategy, success, chars, strategies_tried, error, timestamp)
+            VALUES ('https://example.com/new-log', 'example.com', 'direct', 1, 3, 'direct', NULL, ?)
+            """,
+            (fresh,),
+        )
+        conn.commit()
+
+    result = cache_db.maintain(fetch_log_retention_days=30, vacuum_min_deleted_rows=1)
+
+    with sqlite3.connect(cache_db.db_path) as conn:
+        cache_count = conn.execute("SELECT COUNT(*) FROM content_cache").fetchone()[0]
+        fetch_count = conn.execute("SELECT COUNT(*) FROM fetch_log").fetchone()[0]
+
+    assert result["expired_content_cache"] == 1
+    assert result["old_fetch_logs"] == 1
+    assert result["deleted_rows"] == 2
+    assert result["vacuumed"] is True
+    assert cache_count == 1
+    assert fetch_count == 1
+
+
+def test_query_database_maintenance_prunes_old_query_logs(tmp_path) -> None:
+    db = QueryDatabase(str(tmp_path / "query_log.db"))
+    now = time.time()
+    old = now - 31 * 86400
+    fresh = now - 5
+
+    with sqlite3.connect(db.db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO query_log (query, timestamp, engine, result_count, response_time_ms)
+            VALUES ('old query', ?, 'bing', 1, 10.0)
+            """,
+            (old,),
+        )
+        conn.execute(
+            """
+            INSERT INTO query_log (query, timestamp, engine, result_count, response_time_ms)
+            VALUES ('fresh query', ?, 'bing', 2, 20.0)
+            """,
+            (fresh,),
+        )
+        conn.commit()
+
+    result = db.maintain(query_log_retention_days=30, vacuum_min_deleted_rows=1)
+    stats = asyncio.run(db.get_stats())
+
+    assert result["old_query_logs"] == 1
+    assert result["deleted_rows"] == 1
+    assert result["vacuumed"] is True
+    assert stats["total_queries"] == 1
+    assert stats["queries_per_engine"] == {"bing": 1}
 
 
 def test_empty_query_returns_400(client: AppClient) -> None:
