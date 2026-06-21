@@ -75,6 +75,7 @@ HEALTHCHECK_QUERY = os.getenv("HEALTHCHECK_QUERY", "python programming language"
 HEALTHCHECK_ENGINES = os.getenv("HEALTHCHECK_ENGINES", "github")
 HEALTHCHECK_SEARCH_TIMEOUT = float(os.getenv("HEALTHCHECK_SEARCH_TIMEOUT", "15"))
 HEALTHCHECK_CACHE_TTL = float(os.getenv("HEALTHCHECK_CACHE_TTL", "15"))
+ENGINE_CATALOG_CACHE_TTL = float(os.getenv("ENGINE_CATALOG_CACHE_TTL", "300"))
 
 # Request logging
 logging.basicConfig(
@@ -95,6 +96,7 @@ content_cache: ContentCache | None = None
 evolver: Evolver | None = None
 http_client: httpx.AsyncClient | None = None
 _health_cache: tuple[float, HealthResponse] | None = None
+_engine_catalog_cache: tuple[float, dict[str, "EngineDescriptor"]] | None = None
 
 
 @asynccontextmanager
@@ -242,6 +244,23 @@ class SearxngQueryResponse:
             self.unresponsive_engines = []
 
 
+@dataclass(frozen=True)
+class EngineDescriptor:
+    """Enabled SearXNG engine metadata used to validate engine requests."""
+
+    name: str
+    shortcut: str
+    categories: list[str]
+
+
+@dataclass(frozen=True)
+class EngineSelection:
+    """Resolved engine request safe to pass to SearXNG."""
+
+    value: str
+    engines: list[EngineDescriptor]
+
+
 def _append_unique(values: list[str], value: object) -> None:
     text = _safe_log_value(value, limit=500).strip()
     if text and text not in values:
@@ -325,6 +344,97 @@ def _upstream_error_response(exc: Exception) -> SearxngQueryResponse:
     )
 
 
+def _engine_key(value: str) -> str:
+    return " ".join(value.strip().lower().split())
+
+
+def _split_engine_list(value: str) -> list[str]:
+    return [engine.strip() for engine in value.split(",") if engine.strip()]
+
+
+async def _enabled_engine_catalog() -> dict[str, EngineDescriptor]:
+    """Return enabled engines keyed by normalized name and shortcut."""
+    global _engine_catalog_cache
+    assert http_client is not None
+    now = time.time()
+    if _engine_catalog_cache and now - _engine_catalog_cache[0] < ENGINE_CATALOG_CACHE_TTL:
+        return _engine_catalog_cache[1]
+
+    resp = await http_client.get(f"{SEARXNG_URL}/config", timeout=5.0)
+    resp.raise_for_status()
+    data = resp.json()
+
+    catalog: dict[str, EngineDescriptor] = {}
+    for engine in data.get("engines", []):
+        if not engine.get("enabled", False):
+            continue
+        name = str(engine.get("name", "")).strip()
+        if not name:
+            continue
+        descriptor = EngineDescriptor(
+            name=name,
+            shortcut=str(engine.get("shortcut", "")).strip(),
+            categories=[str(category).lower() for category in engine.get("categories", [])],
+        )
+        catalog[_engine_key(name)] = descriptor
+        if descriptor.shortcut:
+            catalog[_engine_key(descriptor.shortcut)] = descriptor
+
+    _engine_catalog_cache = (now, catalog)
+    return catalog
+
+
+async def _resolve_engine_selection(engines: str | None) -> EngineSelection | None:
+    """Validate explicit engine requests so SearXNG cannot fall back silently."""
+    if not engines:
+        return None
+
+    requested = _split_engine_list(engines)
+    if not requested:
+        raise HTTPException(status_code=400, detail="No valid engine names provided")
+
+    try:
+        catalog = await _enabled_engine_catalog()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not validate engine list: {exc}") from exc
+
+    invalid: list[str] = []
+    selected: list[EngineDescriptor] = []
+    seen: set[str] = set()
+    for item in requested:
+        descriptor = catalog.get(_engine_key(item))
+        if descriptor is None:
+            invalid.append(item)
+            continue
+        if descriptor.name not in seen:
+            selected.append(descriptor)
+            seen.add(descriptor.name)
+
+    if invalid:
+        preview = sorted({descriptor.name for descriptor in catalog.values()})[:25]
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Unknown or disabled search engine(s)",
+                "invalid_engines": invalid,
+                "hint": "Use /engines to inspect enabled engine names and shortcuts",
+                "enabled_engine_examples": preview,
+            },
+        )
+
+    return EngineSelection(
+        value=",".join(descriptor.name for descriptor in selected),
+        engines=selected,
+    )
+
+
+def _supports_site_search(selection: EngineSelection | None) -> bool:
+    if selection is None:
+        return True
+    site_categories = {"general", "web"}
+    return all(site_categories.intersection(engine.categories) for engine in selection.engines)
+
+
 async def _query_searxng(
     query: str,
     count: int = 10,
@@ -404,9 +514,11 @@ async def search(
     if len(q) > 500:
         raise HTTPException(status_code=400, detail="Query too long (max 500 chars)")
 
+    engine_selection = await _resolve_engine_selection(engines)
+    resolved_engines = engine_selection.value if engine_selection else ""
     cache_domain = domain or ""
     cache_exclude_domains = exclude_domains or ""
-    cached_resp = cache.get(q, engines or "", count, cache_domain, cache_exclude_domains, fetch)
+    cached_resp = cache.get(q, resolved_engines, count, cache_domain, cache_exclude_domains, fetch)
     if cached_resp is not None:
         cached_resp.meta.cached = True
         cached_resp.meta.response_time_ms = round((time.time() - start) * 1000, 1)
@@ -415,11 +527,11 @@ async def search(
     query_text = q
     if domain:
         include_domain = _normalize_domain_filter(domain)
-        if include_domain:
+        if include_domain and _supports_site_search(engine_selection):
             query_text = _domain_scoped_query(q, include_domain)
 
     try:
-        upstream = await _query_searxng(query_text, count * 2, engines)
+        upstream = await _query_searxng(query_text, count * 2, resolved_engines or None)
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"SearXNG error: {e}")
 
@@ -475,7 +587,7 @@ async def search(
         ),
     )
 
-    cache.set(q, engines or "", count, response, cache_domain, cache_exclude_domains, fetch)
+    cache.set(q, resolved_engines, count, response, cache_domain, cache_exclude_domains, fetch)
     return response
 
 
@@ -853,7 +965,8 @@ async def news(
     if not q or not q.strip():
         raise HTTPException(status_code=400, detail="Query parameter 'q' cannot be empty")
 
-    news_engines = engines or NEWS_ENGINES
+    engine_selection = await _resolve_engine_selection(engines) if engines else None
+    news_engines = engine_selection.value if engine_selection else NEWS_ENGINES
 
     try:
         upstream = await _query_searxng(q, count * 3, engines=news_engines, categories="news")
@@ -1083,10 +1196,11 @@ async def health() -> HealthResponse:
 
     if searxng_ok:
         try:
+            engine_selection = await _resolve_engine_selection(HEALTHCHECK_ENGINES)
             upstream = await _query_searxng(
                 HEALTHCHECK_QUERY,
                 count=1,
-                engines=HEALTHCHECK_ENGINES or None,
+                engines=engine_selection.value if engine_selection else None,
                 timeout=HEALTHCHECK_SEARCH_TIMEOUT,
             )
             search_available = bool(upstream.results)

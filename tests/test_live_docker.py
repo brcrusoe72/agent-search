@@ -67,6 +67,15 @@ def _get_json(base_url: str, path: str, *, headers: dict[str, str] | None = None
     return response.json()
 
 
+def _get_response(base_url: str, path: str, *, headers: dict[str, str] | None = None, **params) -> requests.Response:
+    return requests.get(
+        f"{base_url.rstrip('/')}{path}",
+        params=params or None,
+        headers=headers or {},
+        timeout=TIMEOUT,
+    )
+
+
 def test_public_health() -> None:
     data = _get_json(PUBLIC_BASE_URL, "/health")
     assert data["status"] in {"healthy", "degraded"}, data
@@ -99,6 +108,22 @@ def test_public_search_authenticated() -> None:
     assert data["meta"]["engines_used"]
 
 
+def test_public_invalid_engine_does_not_fallback_authenticated() -> None:
+    response = _get_response(
+        PUBLIC_BASE_URL,
+        "/search",
+        headers=_headers(required=True),
+        q=LIVE_QUERY,
+        count=3,
+        engines="notarealengine",
+    )
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["message"] == "Unknown or disabled search engine(s)"
+    assert detail["invalid_engines"] == ["notarealengine"]
+
+
 def test_private_health() -> None:
     data = _get_json(PRIVATE_BASE_URL, "/health")
     assert data["status"] in {"healthy", "degraded"}, data
@@ -122,3 +147,19 @@ def test_private_search_authenticated() -> None:
     assert data.get("results"), data
     assert data["meta"]["total"] >= 1
     assert data["meta"]["engines_used"]
+
+
+def test_private_invalid_engine_does_not_fallback_authenticated() -> None:
+    response = _get_response(
+        PRIVATE_BASE_URL,
+        "/search",
+        headers=_headers(required=True),
+        q=LIVE_QUERY,
+        count=3,
+        engines="notarealengine",
+    )
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["message"] == "Unknown or disabled search engine(s)"
+    assert detail["invalid_engines"] == ["notarealengine"]
