@@ -409,6 +409,10 @@ Environment variables (set in `docker-compose.yml` or `.env`):
 | `CACHE_TTL` | `3600` | Cache duration in seconds |
 | `RATE_LIMIT` | `60` | Max requests per minute |
 | `SQLITE_TIMEOUT` | `1.0` | SQLite lock wait timeout in seconds for query stats |
+| `FETCH_LOG_RETENTION_DAYS` | `30` | Delete fetch analytics rows older than this many days during SQLite maintenance |
+| `QUERY_LOG_RETENTION_DAYS` | `30` | Delete query analytics rows older than this many days during SQLite maintenance |
+| `SQLITE_MAINTENANCE_INTERVAL_SECONDS` | `3600` | Interval for expired content-cache cleanup, log retention, and `PRAGMA optimize` |
+| `SQLITE_VACUUM_MIN_DELETED_ROWS` | `1000` | Run `VACUUM` only when a maintenance pass deletes at least this many rows; set `0` to disable threshold vacuum |
 | `AGENT_SEARCH_TOKEN` | *(empty)* | Bearer token for auth (optional) |
 | `ADAPTERS_DIR` | `/app/adapters` | Path to pluggable adapter modules |
 
