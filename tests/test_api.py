@@ -46,6 +46,7 @@ class FakeSearxngClient:
                 "engines": [
                     {"name": "duckduckgo", "shortcut": "ddg", "enabled": True, "categories": ["general"]},
                     {"name": "brave", "shortcut": "br", "enabled": True, "categories": ["general"]},
+                    {"name": "github", "shortcut": "gh", "enabled": True, "categories": ["it", "repos"]},
                 ]
             })
         if url.endswith("/search"):
@@ -111,6 +112,12 @@ class UnresponsiveFakeSearxngClient:
     async def get(self, url: str, params: dict | None = None, timeout: float | None = None) -> FakeResponse:
         if url.endswith("/healthz"):
             return FakeResponse({})
+        if url.endswith("/config"):
+            return FakeResponse({
+                "engines": [
+                    {"name": "github", "shortcut": "gh", "enabled": True, "categories": ["it", "repos"]},
+                ]
+            })
         if url.endswith("/search"):
             return FakeResponse({
                 "results": [],
@@ -119,6 +126,47 @@ class UnresponsiveFakeSearxngClient:
                     {"engine": "brave", "error": "blocked"},
                 ],
                 "errors": ["all engines failed"],
+            })
+        return FakeResponse({})
+
+
+class EngineAwareFakeSearxngClient:
+    def __init__(self) -> None:
+        self.search_params: list[dict] = []
+
+    async def get(self, url: str, params: dict | None = None, timeout: float | None = None) -> FakeResponse:
+        if url.endswith("/config"):
+            return FakeResponse({
+                "engines": [
+                    {"name": "github", "shortcut": "gh", "enabled": True, "categories": ["it", "repos"]},
+                    {"name": "bing", "shortcut": "b", "enabled": True, "categories": ["general", "web"]},
+                    {"name": "disabled", "shortcut": "off", "enabled": False, "categories": ["general"]},
+                ]
+            })
+        if url.endswith("/search"):
+            search_params = params or {}
+            self.search_params.append(dict(search_params))
+            engine = search_params.get("engines")
+            if engine == "github":
+                return FakeResponse({
+                    "results": [
+                        {
+                            "title": "python/cpython",
+                            "url": "https://github.com/python/cpython",
+                            "content": "The Python programming language",
+                            "engines": ["github"],
+                        }
+                    ]
+                })
+            return FakeResponse({
+                "results": [
+                    {
+                        "title": "example",
+                        "url": "https://example.com/search-result",
+                        "content": "Example web result",
+                        "engines": [engine or "bing"],
+                    }
+                ]
             })
         return FakeResponse({})
 
@@ -144,6 +192,7 @@ def isolated_app_state(monkeypatch: pytest.MonkeyPatch, tmp_path):
     monkeypatch.setattr(main, "evolver", None)
     monkeypatch.setattr(main, "cache", Cache(ttl=3600))
     monkeypatch.setattr(main, "_health_cache", None)
+    monkeypatch.setattr(main, "_engine_catalog_cache", None)
     monkeypatch.setattr(main, "query_db", QueryDatabase(str(tmp_path / "query_log.db")))
     main._rate_store.clear()
     main._global_timestamps.clear()
@@ -238,6 +287,52 @@ def test_search_exclude_domains_matches_hostname_only(monkeypatch: pytest.Monkey
     assert response.status_code == 200
     urls = [r["url"] for r in response.json()["results"]]
     assert urls == ["https://notexample.com/three", "https://other.test/articles/example.com"]
+
+
+def test_search_rejects_unknown_engine_before_searxng_fallback(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
+    fake = EngineAwareFakeSearxngClient()
+    monkeypatch.setattr(main, "http_client", fake)
+
+    response = client.get("/search", params={"q": "python", "engines": "notarealengine"})
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["message"] == "Unknown or disabled search engine(s)"
+    assert detail["invalid_engines"] == ["notarealengine"]
+    assert fake.search_params == []
+
+
+def test_search_resolves_engine_shortcuts(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
+    fake = EngineAwareFakeSearxngClient()
+    monkeypatch.setattr(main, "http_client", fake)
+
+    response = client.get("/search", params={"q": "python", "engines": "gh"})
+
+    assert response.status_code == 200
+    assert fake.search_params[0]["engines"] == "github"
+    assert response.json()["meta"]["engines_used"] == ["github"]
+
+
+def test_domain_filter_does_not_site_scope_non_web_engines(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
+    fake = EngineAwareFakeSearxngClient()
+    monkeypatch.setattr(main, "http_client", fake)
+
+    response = client.get("/search", params={"q": "python", "domain": "github.com", "engines": "github"})
+
+    assert response.status_code == 200
+    assert fake.search_params[0]["q"] == "python"
+    assert response.json()["meta"]["total"] == 1
+
+
+def test_domain_filter_site_scopes_web_engines(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
+    fake = EngineAwareFakeSearxngClient()
+    monkeypatch.setattr(main, "http_client", fake)
+
+    response = client.get("/search", params={"q": "python", "domain": "example.com", "engines": "bing"})
+
+    assert response.status_code == 200
+    assert fake.search_params[0]["q"] == "site:example.com python"
+    assert response.json()["meta"]["total"] == 1
 
 
 def test_search_preserves_upstream_diagnostics(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
