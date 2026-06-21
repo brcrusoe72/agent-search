@@ -70,6 +70,32 @@ class BatchReadResponse:
 
 
 @dataclass
+class BrowserLink:
+    """Link extracted from a rendered page."""
+
+    text: str = ""
+    url: str = ""
+
+
+@dataclass
+class BrowserFetchResponse:
+    """Response from browser-render extraction."""
+
+    url: str = ""
+    final_url: str = ""
+    title: str = ""
+    content: Optional[str] = None
+    chars: int = 0
+    links: List[BrowserLink] = field(default_factory=list)
+    success: bool = False
+    strategy: str = "browser-render"
+    error: Optional[str] = None
+    challenge_detected: bool = False
+    blocked_reason: Optional[str] = None
+    render_time_ms: float = 0.0
+
+
+@dataclass
 class NewsResult:
     """A structured news result."""
 

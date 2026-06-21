@@ -1,8 +1,9 @@
 ARG PYTHON_BASE_IMAGE=python@sha256:9e01bf1ae5db7649a236da7be1e94ffbbbdd7a93f867dd0d8d5720d9e1f89fab
 FROM ${PYTHON_BASE_IMAGE}
 
-# System deps for PDF extraction and yt-dlp
+# System deps for PDF extraction, yt-dlp, and browser-render extraction
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    chromium \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 

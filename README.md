@@ -1,6 +1,6 @@
 # AgentSearch
 
-Self-hosted search API for AI agents. 16 endpoints. 9-strategy content extraction. Optional Tor-anonymized stack. No third-party search API keys, no per-query fees, no vendor lock-in. Optional local bearer auth is supported.
+Self-hosted search API for AI agents. 17 endpoints. Kill-chain content extraction with optional browser rendering. Optional Tor-anonymized stack. No third-party search API keys, no per-query fees, no vendor lock-in. Optional local bearer auth is supported.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![PyPI](https://img.shields.io/pypi/v/agentsearch-client)](https://pypi.org/project/agentsearch-client/)
 
@@ -100,13 +100,13 @@ Strategy modes can also use direct no-key providers for vertical search. These d
 
 ## Why not just use SearXNG directly?
 
-SearXNG finds pages. AgentSearch finds pages, reads them, scores them, deduplicates them, caches them, scrubs prompt injections out of them, detects paywalls, falls back through 9 extraction strategies when the first one fails, and gets better at it over time. One API call.
+SearXNG finds pages. AgentSearch finds pages, reads them, scores them, deduplicates them, caches them, scrubs prompt injections out of them, detects paywalls, falls back through escalating extraction strategies when the first one fails, and gets better at it over time. One API call.
 
 | | AgentSearch | Tavily | Exa | SerpAPI | Raw SearXNG |
 |---|---|---|---|---|---|
 | **Cost** | Free | $0.005/query | $0.001/query | $50/mo | Free |
 | **Self-hosted** | ✅ | ❌ | ❌ | ❌ | ✅ |
-| **Content extraction** | 9-strategy kill chain | Basic | Basic | ❌ | ❌ |
+| **Content extraction** | Kill chain + browser renderer | Basic | Basic | ❌ | ❌ |
 | **Deduplication** | Cross-engine | ❌ | ❌ | ❌ | ❌ |
 | **Prompt injection scrubbing** | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **Self-improving** | ✅ (evolver) | ❌ | ❌ | ❌ | ❌ |
@@ -133,22 +133,24 @@ SearXNG finds pages. AgentSearch finds pages, reads them, scores them, deduplica
 
 | Endpoint | Method | What it does |
 |---|---|---|
-| `/read` | GET | 9-strategy kill chain extraction for any URL |
+| `/read` | GET | Kill chain extraction for any URL |
 | `/read/batch` | POST | Concurrent multi-URL extraction in one request |
+| `/providers/browser/fetch` | GET | Ephemeral browser render/extract for JS-rendered target pages |
 
 The kill chain escalates through strategies until one succeeds:
 
 1. Direct fetch + smart content selectors
 2. Readability scoring (paragraph density vs link density)
 3. User-agent rotation (Chrome/Safari/Firefox/Edge signatures)
-4. Wayback Machine (CDX API → latest snapshot)
-5. Google Cache
-6. Search-about fallback (find coverage elsewhere)
-7. Custom adapters (pluggable Python modules from disk)
-8. PDF extraction (pdfplumber)
-9. YouTube transcript (yt-dlp)
+4. Browser render/extract for JS-rendered target pages
+5. Wayback Machine (CDX API → latest snapshot)
+6. Google Cache
+7. Search-about fallback (find coverage elsewhere)
+8. Custom adapters (pluggable Python modules from disk)
+9. PDF extraction (pdfplumber)
+10. YouTube transcript (yt-dlp)
 
-Every request gets SSRF protection, prompt injection detection, paywall detection, and content length caps automatically.
+Every request gets SSRF protection, prompt injection detection, paywall detection, and content length caps automatically. The browser renderer uses an ephemeral context, blocks high-cost resource types by default, and reports CAPTCHA/challenge pages instead of trying to bypass them. It is for rendering target pages, not for scraping blocked search-result pages.
 
 ### Self-improvement
 
@@ -223,6 +225,14 @@ curl "http://localhost:3939/read?url=https://example.com/paywalled-article"
 }
 ```
 
+### Browser render a JS page
+
+```bash
+curl "http://localhost:3939/providers/browser/fetch?url=https://example.com/app&max_links=20"
+```
+
+Returns rendered text, page title, final URL, extracted links, trust metadata, and `challenge_detected=true` if the page is a CAPTCHA or bot challenge.
+
 ### Batch read
 
 ```bash
@@ -248,6 +258,10 @@ for r in results.results:
 # Content extraction
 page = client.read("https://example.com/article")
 print(page.content[:500])
+
+# Browser-rendered extraction for JS-heavy target pages
+rendered = client.browser_fetch("https://example.com/app", max_links=20)
+print(rendered.title, rendered.links[:3])
 
 # Batch read
 pages = client.read_batch(["https://a.com", "https://b.com"])
@@ -359,8 +373,9 @@ Port 3939 (direct)                    Port 3940 (Tor-anonymized)
 
 | Module | LOC | What it does |
 |---|---|---|
-| `killchain.py` | 1016 | 9-strategy escalating content extraction |
-| `main.py` | 920 | FastAPI app, 16 endpoints, auth, rate limiting |
+| `killchain.py` | 1016 | Escalating content extraction and browser-render fallback |
+| `browser_renderer.py` | 320 | Ephemeral browser rendering, extraction, and challenge detection |
+| `main.py` | 920 | FastAPI app, 17 endpoints, auth, rate limiting |
 | `source_tracer.py` | 620 | Source provenance tracking and citation chains |
 | `scrubber.py` | 539 | Prompt injection detection and content sanitization |
 | `source_library.py` | 310 | Curated institutional source registry |

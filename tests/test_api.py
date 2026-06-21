@@ -11,12 +11,15 @@ from __future__ import annotations
 import asyncio
 import os
 import socket
+import sys
+import types
 
 import httpx
 import pytest
 
 from app import killchain
 from app import main
+from app import browser_renderer
 from app.cache import Cache
 from app.database import QueryDatabase
 from app.dedup import deduplicate_with_scoring
@@ -733,6 +736,204 @@ def test_news_records_searxng_error_attempt(monkeypatch: pytest.MonkeyPatch, cli
     assert row["errors"] == 1
     assert row["health"] == "error"
     assert "SearXNG error" in row["last_error"]
+
+
+def test_browser_challenge_detection() -> None:
+    assert browser_renderer.detect_browser_challenge("Client Challenge", "Verify you are human", "")
+    assert browser_renderer.detect_browser_challenge("Access denied", "Cloudflare Ray ID: abc", "")
+    assert not browser_renderer.detect_browser_challenge("Example Domain", "Ordinary article content", "")
+
+
+def test_browser_extract_rendered_content() -> None:
+    paragraph = "Rendered application text with enough useful content for extraction. " * 8
+    html = f"<html><body><main><p>{paragraph}</p></main></body></html>"
+
+    content = browser_renderer.extract_rendered_content(html, "", 1000)
+
+    assert content is not None
+    assert "Rendered application text" in content
+
+
+def test_browser_fetch_endpoint(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
+    async def fake_render_browser_page(url: str, **kwargs):
+        return browser_renderer.BrowserRenderResult(
+            url=url,
+            final_url=url,
+            title="Rendered App",
+            content="Rendered app content " * 20,
+            chars=420,
+            links=[
+                browser_renderer.BrowserLink(text="Docs", url="https://example.com/docs"),
+            ],
+            success=True,
+            render_time_ms=12.3,
+        )
+
+    monkeypatch.setattr(browser_renderer, "render_browser_page", fake_render_browser_page)
+
+    response = client.get(
+        "/providers/browser/fetch",
+        params={"url": "https://example.com/app", "max_chars": 1000, "max_links": 5},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert data["strategy"] == "browser-render"
+    assert data["title"] == "Rendered App"
+    assert data["links"] == [{"text": "Docs", "url": "https://example.com/docs"}]
+
+
+def test_browser_render_ignores_close_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeLocator:
+        async def inner_text(self, timeout: int) -> str:
+            return "Rendered body content " * 20
+
+    class FakePage:
+        url = "https://example.com/app"
+
+        async def route(self, pattern: str, handler) -> None:
+            return None
+
+        async def goto(self, url: str, wait_until: str, timeout: int):
+            self.url = url
+            return types.SimpleNamespace(status=200)
+
+        async def wait_for_load_state(self, state: str, timeout: int) -> None:
+            return None
+
+        async def title(self) -> str:
+            return "Example App"
+
+        async def content(self) -> str:
+            body = "Rendered body content " * 20
+            return f"<html><body><main><p>{body}</p></main><a href='https://example.com/docs'>Docs</a></body></html>"
+
+        def locator(self, selector: str) -> FakeLocator:
+            return FakeLocator()
+
+        async def evaluate(self, script: str, max_links: int):
+            return [{"text": "Docs", "href": "https://example.com/docs"}]
+
+    class FakeContext:
+        async def new_page(self) -> FakePage:
+            return FakePage()
+
+        async def close(self) -> None:
+            raise RuntimeError("context already closed")
+
+    class FakeBrowser:
+        async def new_context(self, **kwargs) -> FakeContext:
+            return FakeContext()
+
+        async def close(self) -> None:
+            raise RuntimeError("browser already closed")
+
+    class FakeChromium:
+        async def launch(self, **kwargs) -> FakeBrowser:
+            return FakeBrowser()
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+
+    class FakePlaywrightManager:
+        async def __aenter__(self) -> FakePlaywright:
+            return FakePlaywright()
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    fake_async_api = types.ModuleType("playwright.async_api")
+    fake_async_api.TimeoutError = TimeoutError
+    fake_async_api.async_playwright = lambda: FakePlaywrightManager()
+    fake_playwright = types.ModuleType("playwright")
+    fake_playwright.async_api = fake_async_api
+
+    monkeypatch.setitem(sys.modules, "playwright", fake_playwright)
+    monkeypatch.setitem(sys.modules, "playwright.async_api", fake_async_api)
+    monkeypatch.setattr(browser_renderer, "is_safe_url", lambda url, verbose=False: True)
+    monkeypatch.setattr(browser_renderer, "_default_chromium_path", lambda: "/usr/bin/chromium")
+
+    result = asyncio.run(browser_renderer.render_browser_page("https://example.com/app", max_links=5))
+
+    assert result.success is True
+    assert result.title == "Example App"
+    assert result.content and "Rendered body content" in result.content
+    assert result.links[0].url == "https://example.com/docs"
+
+
+def test_browser_render_rejects_http_error_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeLocator:
+        async def inner_text(self, timeout: int) -> str:
+            return "Rendered error page content " * 20
+
+    class FakePage:
+        url = "https://example.com/missing"
+
+        async def route(self, pattern: str, handler) -> None:
+            return None
+
+        async def goto(self, url: str, wait_until: str, timeout: int):
+            self.url = url
+            return types.SimpleNamespace(status=404)
+
+        async def wait_for_load_state(self, state: str, timeout: int) -> None:
+            return None
+
+        async def title(self) -> str:
+            return "Not Found"
+
+        async def content(self) -> str:
+            return "<html><body><main>Rendered error page content " * 20 + "</main></body></html>"
+
+        def locator(self, selector: str) -> FakeLocator:
+            return FakeLocator()
+
+    class FakeContext:
+        async def new_page(self) -> FakePage:
+            return FakePage()
+
+        async def close(self) -> None:
+            return None
+
+    class FakeBrowser:
+        async def new_context(self, **kwargs) -> FakeContext:
+            return FakeContext()
+
+        async def close(self) -> None:
+            return None
+
+    class FakeChromium:
+        async def launch(self, **kwargs) -> FakeBrowser:
+            return FakeBrowser()
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+
+    class FakePlaywrightManager:
+        async def __aenter__(self) -> FakePlaywright:
+            return FakePlaywright()
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    fake_async_api = types.ModuleType("playwright.async_api")
+    fake_async_api.TimeoutError = TimeoutError
+    fake_async_api.async_playwright = lambda: FakePlaywrightManager()
+    fake_playwright = types.ModuleType("playwright")
+    fake_playwright.async_api = fake_async_api
+
+    monkeypatch.setitem(sys.modules, "playwright", fake_playwright)
+    monkeypatch.setitem(sys.modules, "playwright.async_api", fake_async_api)
+    monkeypatch.setattr(browser_renderer, "is_safe_url", lambda url, verbose=False: True)
+    monkeypatch.setattr(browser_renderer, "_default_chromium_path", lambda: "/usr/bin/chromium")
+
+    result = asyncio.run(browser_renderer.render_browser_page("https://example.com/missing"))
+
+    assert result.success is False
+    assert result.content is None
+    assert result.blocked_reason == "http_error"
+    assert result.error == "Rendered navigation returned HTTP 404"
 
 
 def test_strategy_coverage_preserves_successful_provider_rows() -> None:

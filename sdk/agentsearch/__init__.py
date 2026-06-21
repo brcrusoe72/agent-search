@@ -17,6 +17,8 @@ Or use module-level convenience functions::
 from .client import AgentSearch, AgentSearchError
 from .models import (
     BatchReadResponse,
+    BrowserFetchResponse,
+    BrowserLink,
     HealthResponse,
     JobResult,
     JobSearchResponse,
@@ -37,6 +39,8 @@ __all__ = [
     "SearchMeta",
     "ReadResult",
     "BatchReadResponse",
+    "BrowserLink",
+    "BrowserFetchResponse",
     "NewsResult",
     "NewsResponse",
     "JobResult",
@@ -48,6 +52,7 @@ __all__ = [
     "deep_search",
     "read",
     "read_batch",
+    "browser_fetch",
     "news",
     "search_jobs",
 ]
@@ -102,6 +107,11 @@ def read(url: str, **kwargs) -> ReadResult:  # type: ignore[no-untyped-def]
 def read_batch(urls: list, **kwargs) -> BatchReadResponse:  # type: ignore[no-untyped-def]
     """Extract content from multiple URLs. See :meth:`AgentSearch.read_batch`."""
     return _get_client().read_batch(urls, **kwargs)
+
+
+def browser_fetch(url: str, **kwargs) -> BrowserFetchResponse:  # type: ignore[no-untyped-def]
+    """Browser-render a URL. See :meth:`AgentSearch.browser_fetch`."""
+    return _get_client().browser_fetch(url, **kwargs)
 
 
 def news(query: str, **kwargs) -> NewsResponse:  # type: ignore[no-untyped-def]
