@@ -9,6 +9,9 @@ from typing import Dict, List
 
 logger = logging.getLogger("agentsearch.database")
 
+QUERY_LOG_RETENTION_DAYS = int(os.getenv("QUERY_LOG_RETENTION_DAYS", "30"))
+SQLITE_VACUUM_MIN_DELETED_ROWS = int(os.getenv("SQLITE_VACUUM_MIN_DELETED_ROWS", "1000"))
+
 
 class QueryDatabase:
     """Simple SQLite database for tracking queries and engine performance."""
@@ -116,6 +119,62 @@ class QueryDatabase:
                 'queries_per_engine': engine_counts,
                 'avg_results_per_engine': avg_results
             }
+
+    def maintain(
+        self,
+        *,
+        query_log_retention_days: int = QUERY_LOG_RETENTION_DAYS,
+        vacuum_min_deleted_rows: int = SQLITE_VACUUM_MIN_DELETED_ROWS,
+    ) -> Dict:
+        """Prune old query logs, then optimize SQLite."""
+        if self.disabled:
+            return {
+                "old_query_logs": 0,
+                "deleted_rows": 0,
+                "query_log_retention_days": query_log_retention_days,
+                "vacuumed": False,
+                "disabled": True,
+            }
+
+        retention_seconds = max(query_log_retention_days, 0) * 86400
+
+        try:
+            cutoff = time.time() - retention_seconds
+            conn = self._connect()
+            try:
+                cursor = conn.execute(
+                    "DELETE FROM query_log WHERE timestamp < ?", (cutoff,)
+                )
+                old_query_logs = max(cursor.rowcount, 0)
+                conn.commit()
+
+                conn.execute("PRAGMA optimize")
+                conn.commit()
+
+                vacuumed = old_query_logs >= vacuum_min_deleted_rows > 0
+                if vacuumed:
+                    conn.execute("VACUUM")
+
+                return {
+                    "old_query_logs": old_query_logs,
+                    "deleted_rows": old_query_logs,
+                    "query_log_retention_days": query_log_retention_days,
+                    "vacuumed": vacuumed,
+                    "disabled": False,
+                }
+            finally:
+                conn.close()
+        except sqlite3.OperationalError as exc:
+            if "readonly" in str(exc).lower():
+                self.disabled = True
+                return {
+                    "old_query_logs": 0,
+                    "deleted_rows": 0,
+                    "query_log_retention_days": query_log_retention_days,
+                    "vacuumed": False,
+                    "disabled": True,
+                }
+            raise
 
 
 # Global instance

@@ -29,6 +29,7 @@ import re
 import time
 import asyncio
 import secrets
+import threading
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -77,6 +78,7 @@ VERSION = "2.0.0"
 HEALTHCHECK_QUERY = os.getenv("HEALTHCHECK_QUERY", "python programming language")
 HEALTHCHECK_ENGINES = os.getenv("HEALTHCHECK_ENGINES", "github")
 HEALTHCHECK_SEARCH_TIMEOUT = float(os.getenv("HEALTHCHECK_SEARCH_TIMEOUT", "15"))
+SQLITE_MAINTENANCE_INTERVAL_SECONDS = max(1, int(os.getenv("SQLITE_MAINTENANCE_INTERVAL_SECONDS", "3600")))
 
 # Request logging
 logging.basicConfig(
@@ -110,23 +112,47 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if evolver is None:
         evolver = Evolver()
 
-    # Periodic cache eviction (every hour)
-    async def _evict_loop():
-        while True:
-            await asyncio.sleep(3600)
-            try:
-                assert content_cache is not None
-                count = await content_cache.evict_expired()
-                if count > 0:
-                    logger.info("Evicted %s expired cache entries", count)
-            except Exception as exc:
-                logger.debug("Cache eviction failed: %s", exc)
+    maintenance_lock = threading.Lock()
 
-    evict_task = asyncio.create_task(_evict_loop())
+    def _run_sqlite_maintenance() -> None:
+        if not maintenance_lock.acquire(blocking=False):
+            logger.debug("Skipping SQLite maintenance because previous pass is still running")
+            return
+        try:
+            assert content_cache is not None
+            cache_result = content_cache.maintain()
+            query_result = query_db.maintain()
+            deleted = cache_result["deleted_rows"] + query_result["deleted_rows"]
+            if deleted > 0 or cache_result["vacuumed"] or query_result["vacuumed"]:
+                logger.info(
+                    "SQLite maintenance deleted %s rows "
+                    "(expired_content_cache=%s, old_fetch_logs=%s, old_query_logs=%s, vacuumed=%s)",
+                    deleted,
+                    cache_result["expired_content_cache"],
+                    cache_result["old_fetch_logs"],
+                    query_result["old_query_logs"],
+                    cache_result["vacuumed"] or query_result["vacuumed"],
+                )
+        except Exception as exc:
+            logger.debug("SQLite maintenance failed: %s", exc)
+        finally:
+            maintenance_lock.release()
+
+    # Periodic SQLite maintenance: cache expiry, log retention, and optimize.
+    async def _maintenance_loop():
+        while True:
+            await asyncio.sleep(SQLITE_MAINTENANCE_INTERVAL_SECONDS)
+            threading.Thread(
+                target=_run_sqlite_maintenance,
+                name="agentsearch-sqlite-maintenance",
+                daemon=True,
+            ).start()
+
+    maintenance_task = asyncio.create_task(_maintenance_loop())
 
     yield
 
-    evict_task.cancel()
+    maintenance_task.cancel()
     if created_http_client and hasattr(http_client, "aclose"):
         await http_client.aclose()
 

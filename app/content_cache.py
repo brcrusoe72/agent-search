@@ -23,6 +23,8 @@ DEFAULT_TTL = 86400       # 24 hours for articles
 NEWS_TTL = 3600           # 1 hour for news
 YOUTUBE_TTL = 604800      # 7 days for YouTube transcripts
 PDF_TTL = 604800          # 7 days for PDFs
+FETCH_LOG_RETENTION_DAYS = int(os.getenv("FETCH_LOG_RETENTION_DAYS", "30"))
+SQLITE_VACUUM_MIN_DELETED_ROWS = int(os.getenv("SQLITE_VACUUM_MIN_DELETED_ROWS", "1000"))
 
 # Strategy → TTL mapping
 STRATEGY_TTL = {
@@ -229,15 +231,55 @@ class ContentCache:
 
     async def evict_expired(self) -> int:
         """Remove expired cache entries. Returns count removed."""
-        def _evict():
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.execute(
-                    "DELETE FROM content_cache WHERE expires_at < ?", (time.time(),)
-                )
-                conn.commit()
-                return cursor.rowcount
-
-        loop = asyncio.get_event_loop()
-        count = await loop.run_in_executor(None, _evict)
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "DELETE FROM content_cache WHERE expires_at < ?", (time.time(),)
+            )
+            conn.commit()
+            count = cursor.rowcount
         self._stats["evictions"] += count
         return count
+
+    def maintain(
+        self,
+        *,
+        fetch_log_retention_days: int = FETCH_LOG_RETENTION_DAYS,
+        vacuum_min_deleted_rows: int = SQLITE_VACUUM_MIN_DELETED_ROWS,
+    ) -> dict:
+        """Prune expired cache and old fetch logs, then optimize SQLite."""
+        retention_seconds = max(fetch_log_retention_days, 0) * 86400
+
+        now = time.time()
+        fetch_cutoff = now - retention_seconds
+        conn = sqlite3.connect(self.db_path)
+        try:
+            expired_cursor = conn.execute(
+                "DELETE FROM content_cache WHERE expires_at < ?", (now,)
+            )
+            expired_cache = max(expired_cursor.rowcount, 0)
+
+            fetch_cursor = conn.execute(
+                "DELETE FROM fetch_log WHERE timestamp < ?", (fetch_cutoff,)
+            )
+            old_fetch_logs = max(fetch_cursor.rowcount, 0)
+            conn.commit()
+
+            conn.execute("PRAGMA optimize")
+            conn.commit()
+
+            deleted_rows = expired_cache + old_fetch_logs
+            vacuumed = deleted_rows >= vacuum_min_deleted_rows > 0
+            if vacuumed:
+                conn.execute("VACUUM")
+
+            result = {
+                "expired_content_cache": expired_cache,
+                "old_fetch_logs": old_fetch_logs,
+                "deleted_rows": deleted_rows,
+                "fetch_log_retention_days": fetch_log_retention_days,
+                "vacuumed": vacuumed,
+            }
+        finally:
+            conn.close()
+        self._stats["evictions"] += result["expired_content_cache"]
+        return result
