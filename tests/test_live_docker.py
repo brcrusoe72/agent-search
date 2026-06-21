@@ -23,7 +23,9 @@ pytestmark = pytest.mark.skipif(
 
 PUBLIC_BASE_URL = os.getenv("AGENTSEARCH_PUBLIC_URL", "http://127.0.0.1:3939")
 PRIVATE_BASE_URL = os.getenv("AGENTSEARCH_PRIVATE_URL", "http://127.0.0.1:3940")
-TIMEOUT = float(os.getenv("AGENTSEARCH_DOCKER_TIMEOUT", "30"))
+TIMEOUT = float(os.getenv("AGENTSEARCH_DOCKER_TIMEOUT", "60"))
+LIVE_QUERY = os.getenv("AGENTSEARCH_LIVE_QUERY", "python programming language")
+LIVE_ENGINES = os.getenv("AGENTSEARCH_LIVE_ENGINES", "github")
 
 
 def _load_token() -> str | None:
@@ -67,8 +69,12 @@ def _get_json(base_url: str, path: str, *, headers: dict[str, str] | None = None
 
 def test_public_health() -> None:
     data = _get_json(PUBLIC_BASE_URL, "/health")
-    assert data["status"] in {"healthy", "degraded"}
-    assert "searxng_available" in data
+    assert data["status"] in {"healthy", "degraded"}, data
+    assert data["searxng_available"] is True
+    assert data["search_available"] is True
+    assert data.get("upstream_status") in {"ok", "degraded"}
+    if data["status"] == "degraded":
+        assert data.get("upstream_errors") or data.get("unresponsive_engines")
 
 
 def test_public_engines_authenticated() -> None:
@@ -83,17 +89,24 @@ def test_public_search_authenticated() -> None:
         PUBLIC_BASE_URL,
         "/search",
         headers=_headers(required=True),
-        q="agent search",
-        count=1,
+        q=LIVE_QUERY,
+        count=3,
+        engines=LIVE_ENGINES,
     )
-    assert isinstance(data.get("results"), list)
-    assert "meta" in data
+    assert data.get("meta", {}).get("upstream_status") in {"ok", "degraded"}, data.get("meta")
+    assert data.get("results"), data
+    assert data["meta"]["total"] >= 1
+    assert data["meta"]["engines_used"]
 
 
 def test_private_health() -> None:
     data = _get_json(PRIVATE_BASE_URL, "/health")
-    assert data["status"] in {"healthy", "degraded"}
-    assert "searxng_available" in data
+    assert data["status"] in {"healthy", "degraded"}, data
+    assert data["searxng_available"] is True
+    assert data["search_available"] is True
+    assert data.get("upstream_status") in {"ok", "degraded"}
+    if data["status"] == "degraded":
+        assert data.get("upstream_errors") or data.get("unresponsive_engines")
 
 
 def test_private_search_authenticated() -> None:
@@ -101,8 +114,11 @@ def test_private_search_authenticated() -> None:
         PRIVATE_BASE_URL,
         "/search",
         headers=_headers(required=True),
-        q="agent search",
-        count=1,
+        q=LIVE_QUERY,
+        count=3,
+        engines=LIVE_ENGINES,
     )
-    assert isinstance(data.get("results"), list)
-    assert "meta" in data
+    assert data.get("meta", {}).get("upstream_status") in {"ok", "degraded"}, data.get("meta")
+    assert data.get("results"), data
+    assert data["meta"]["total"] >= 1
+    assert data["meta"]["engines_used"]

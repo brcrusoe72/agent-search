@@ -28,6 +28,9 @@ class SearchMeta(BaseModel):
     cached: bool = False
     response_time_ms: float = 0.0
     queries_used: list[str] | None = Field(None, description="For multi-query fusion")
+    upstream_status: str = Field("ok", description="ok | degraded | error")
+    upstream_errors: list[str] = Field(default_factory=list, description="SearXNG/backend errors")
+    unresponsive_engines: list[str] = Field(default_factory=list, description="Engines SearXNG reported as unresponsive")
 
 
 class SearchResponse(BaseModel):
@@ -172,4 +175,8 @@ class HealthResponse(BaseModel):
     """Health check response."""
     status: str
     searxng_available: bool
+    search_available: bool = False
+    upstream_status: str = "unknown"
+    upstream_errors: list[str] = Field(default_factory=list)
+    unresponsive_engines: list[str] = Field(default_factory=list)
     version: str = "1.0.0"

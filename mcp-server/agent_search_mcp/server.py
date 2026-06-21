@@ -41,18 +41,51 @@ def make_server(base_url: str, token: str | None = None) -> Server:
     timeout = httpx.Timeout(120, connect=10)
     headers = {"Authorization": f"Bearer {token}"} if token else None
 
+    def _add_optional(params: dict, arguments: dict, *names: str) -> dict:
+        for name in names:
+            value = arguments.get(name)
+            if value is not None and value != "":
+                params[name] = value
+        return params
+
     @server.list_tools()
     async def list_tools() -> list[Tool]:
         return [
             Tool(
+                name="health",
+                description="Check AgentSearch, SearXNG, and live search health.",
+                inputSchema={"type": "object", "properties": {}},
+            ),
+            Tool(
+                name="engines",
+                description="List engines configured in the connected SearXNG instance.",
+                inputSchema={"type": "object", "properties": {}},
+            ),
+            Tool(
                 name="search",
-                description="SearXNG-backed web search. Run AgentSearch /engines for the live engine list. Returns ranked results with titles, URLs, and snippets.",
+                description="SearXNG-backed web search with optional engine, domain, exclusion, and fetch controls.",
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "query": {"type": "string", "description": "Search query"},
                         "count": {"type": "integer", "description": "Number of results (default 10)", "default": 10},
+                        "engines": {"type": "string", "description": "Comma-separated engine names"},
+                        "domain": {"type": "string", "description": "Restrict results to this domain"},
+                        "exclude_domains": {"type": "string", "description": "Comma-separated domains to exclude"},
                         "fetch": {"type": "boolean", "description": "Also extract page content from top results", "default": False},
+                    },
+                    "required": ["query"],
+                },
+            ),
+            Tool(
+                name="search_extract",
+                description="Search and extract readable page content from top results.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Search query"},
+                        "count": {"type": "integer", "description": "Number of results (default 5)", "default": 5},
+                        "engines": {"type": "string", "description": "Comma-separated engine names"},
                     },
                     "required": ["query"],
                 },
@@ -70,12 +103,50 @@ def make_server(base_url: str, token: str | None = None) -> Server:
                 },
             ),
             Tool(
+                name="policy_search",
+                description="Policy/geopolitical search with source-library boost, junk filtering, and domain-quality ranking.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Policy/geopolitical search query"},
+                        "count": {"type": "integer", "description": "Number of results (default 10)", "default": 10},
+                        "fetch": {"type": "boolean", "description": "Extract page content", "default": False},
+                    },
+                    "required": ["query"],
+                },
+            ),
+            Tool(
+                name="source_search",
+                description="Trace primary sources across curated government, research, and policy institutions.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Topic to trace"},
+                        "count": {"type": "integer", "description": "Maximum results (default 15)", "default": 15},
+                        "fetch": {"type": "boolean", "description": "Extract source page content", "default": False},
+                    },
+                    "required": ["query"],
+                },
+            ),
+            Tool(
+                name="source_institutions",
+                description="List curated source registry institutions, optionally filtered by topic tag.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "topic": {"type": "string", "description": "Optional topic tag filter"},
+                    },
+                },
+            ),
+            Tool(
                 name="read_url",
                 description="Extract readable content from any URL using a 9-strategy kill chain (direct, readability, UA rotation, Wayback, Google Cache, etc).",
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "url": {"type": "string", "description": "URL to extract content from"},
+                        "max_chars": {"type": "integer", "description": "Maximum content length"},
+                        "skip_cache": {"type": "boolean", "description": "Bypass content cache", "default": False},
                     },
                     "required": ["url"],
                 },
@@ -87,6 +158,7 @@ def make_server(base_url: str, token: str | None = None) -> Server:
                     "type": "object",
                     "properties": {
                         "urls": {"type": "array", "items": {"type": "string"}, "description": "List of URLs to extract (max 20)"},
+                        "max_chars": {"type": "integer", "description": "Maximum chars per result"},
                     },
                     "required": ["urls"],
                 },
@@ -99,6 +171,7 @@ def make_server(base_url: str, token: str | None = None) -> Server:
                     "properties": {
                         "query": {"type": "string", "description": "News topic to search"},
                         "count": {"type": "integer", "description": "Number of results (default 10)", "default": 10},
+                        "engines": {"type": "string", "description": "Override comma-separated news engines"},
                     },
                     "required": ["query"],
                 },
@@ -110,6 +183,8 @@ def make_server(base_url: str, token: str | None = None) -> Server:
                     "type": "object",
                     "properties": {
                         "query": {"type": "string", "description": "Job search query"},
+                        "location": {"type": "string", "description": "Job location"},
+                        "salary_min": {"type": "integer", "description": "Minimum salary filter"},
                     },
                     "required": ["query"],
                 },
@@ -120,26 +195,65 @@ def make_server(base_url: str, token: str | None = None) -> Server:
     async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         try:
             async with httpx.AsyncClient(base_url=base_url, timeout=timeout, headers=headers) as client:
-                if name == "search":
+                if name == "health":
+                    r = await client.get("/health")
+
+                elif name == "engines":
+                    r = await client.get("/engines")
+
+                elif name == "search":
                     params = {"q": arguments["query"], "count": arguments.get("count", 10)}
+                    _add_optional(params, arguments, "engines", "domain", "exclude_domains")
                     if arguments.get("fetch"):
                         params["fetch"] = "true"
                     r = await client.get("/search", params=params)
 
+                elif name == "search_extract":
+                    params = {"q": arguments["query"], "count": arguments.get("count", 5)}
+                    _add_optional(params, arguments, "engines")
+                    r = await client.get("/search/extract", params=params)
+
                 elif name == "deep_search":
                     r = await client.get("/search/deep", params={"q": arguments["query"], "count": arguments.get("count", 10)})
 
+                elif name == "policy_search":
+                    params = {"q": arguments["query"], "count": arguments.get("count", 10)}
+                    if arguments.get("fetch"):
+                        params["fetch"] = "true"
+                    r = await client.get("/search/policy", params=params)
+
+                elif name == "source_search":
+                    params = {"q": arguments["query"], "count": arguments.get("count", 15)}
+                    if arguments.get("fetch"):
+                        params["fetch"] = "true"
+                    r = await client.get("/search/sources", params=params)
+
+                elif name == "source_institutions":
+                    params = {}
+                    _add_optional(params, arguments, "topic")
+                    r = await client.get("/search/sources/institutions", params=params or None)
+
                 elif name == "read_url":
-                    r = await client.get("/read", params={"url": arguments["url"]})
+                    params = {"url": arguments["url"]}
+                    _add_optional(params, arguments, "max_chars")
+                    if arguments.get("skip_cache"):
+                        params["skip_cache"] = "true"
+                    r = await client.get("/read", params=params)
 
                 elif name == "read_batch":
-                    r = await client.post("/read/batch", json={"urls": arguments["urls"]})
+                    body = {"urls": arguments["urls"]}
+                    _add_optional(body, arguments, "max_chars")
+                    r = await client.post("/read/batch", json=body)
 
                 elif name == "news":
-                    r = await client.get("/news", params={"q": arguments["query"], "count": arguments.get("count", 10)})
+                    params = {"q": arguments["query"], "count": arguments.get("count", 10)}
+                    _add_optional(params, arguments, "engines")
+                    r = await client.get("/news", params=params)
 
                 elif name == "search_jobs":
-                    r = await client.get("/search/jobs", params={"q": arguments["query"]})
+                    params = {"q": arguments["query"]}
+                    _add_optional(params, arguments, "location", "salary_min")
+                    r = await client.get("/search/jobs", params=params)
 
                 else:
                     return [TextContent(type="text", text=f"Unknown tool: {name}")]

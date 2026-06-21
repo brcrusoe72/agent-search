@@ -29,6 +29,9 @@ class SearchMeta:
     cached: bool = False
     response_time_ms: float = 0.0
     queries_used: Optional[List[str]] = None
+    upstream_status: str = "ok"
+    upstream_errors: List[str] = field(default_factory=list)
+    unresponsive_engines: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -112,4 +115,8 @@ class HealthResponse:
 
     status: str = ""
     searxng_available: bool = False
+    search_available: bool = False
+    upstream_status: str = "unknown"
+    upstream_errors: List[str] = field(default_factory=list)
+    unresponsive_engines: List[str] = field(default_factory=list)
     version: str = ""

@@ -70,8 +70,12 @@ class FakeSearxngClient:
 
 
 class DomainFakeSearxngClient:
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
     async def get(self, url: str, params: dict | None = None, timeout: float | None = None) -> FakeResponse:
         if url.endswith("/search"):
+            self.queries.append((params or {}).get("q", ""))
             return FakeResponse({
                 "results": [
                     {
@@ -103,6 +107,22 @@ class DomainFakeSearxngClient:
         return FakeResponse({})
 
 
+class UnresponsiveFakeSearxngClient:
+    async def get(self, url: str, params: dict | None = None, timeout: float | None = None) -> FakeResponse:
+        if url.endswith("/healthz"):
+            return FakeResponse({})
+        if url.endswith("/search"):
+            return FakeResponse({
+                "results": [],
+                "unresponsive_engines": [
+                    ["duckduckgo", "timeout"],
+                    {"engine": "brave", "error": "blocked"},
+                ],
+                "errors": ["all engines failed"],
+            })
+        return FakeResponse({})
+
+
 class AppClient:
     """Small sync wrapper around ASGITransport for self-contained API tests."""
 
@@ -123,6 +143,7 @@ def isolated_app_state(monkeypatch: pytest.MonkeyPatch, tmp_path):
     monkeypatch.setattr(main, "content_cache", None)
     monkeypatch.setattr(main, "evolver", None)
     monkeypatch.setattr(main, "cache", Cache(ttl=3600))
+    monkeypatch.setattr(main, "_health_cache", None)
     monkeypatch.setattr(main, "query_db", QueryDatabase(str(tmp_path / "query_log.db")))
     main._rate_store.clear()
     main._global_timestamps.clear()
@@ -150,6 +171,8 @@ def test_health_endpoint(client: AppClient) -> None:
     data = response.json()
     assert data["status"] == "healthy"
     assert data["searxng_available"] is True
+    assert data["search_available"] is True
+    assert data["upstream_status"] == "ok"
     assert data["version"] == "2.0.0"
 
 
@@ -196,13 +219,15 @@ def test_search_endpoint_cache_distinguishes_domain_filter(client: AppClient) ->
 
 
 def test_search_domain_filter_matches_hostname_only(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
-    monkeypatch.setattr(main, "http_client", DomainFakeSearxngClient())
+    fake = DomainFakeSearxngClient()
+    monkeypatch.setattr(main, "http_client", fake)
 
     response = client.get("/search", params={"q": "domain filter", "count": 10, "domain": "example.com"})
 
     assert response.status_code == 200
     urls = [r["url"] for r in response.json()["results"]]
     assert urls == ["https://example.com/one", "https://docs.example.com/two"]
+    assert fake.queries == ["site:example.com domain filter"]
 
 
 def test_search_exclude_domains_matches_hostname_only(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
@@ -213,6 +238,34 @@ def test_search_exclude_domains_matches_hostname_only(monkeypatch: pytest.Monkey
     assert response.status_code == 200
     urls = [r["url"] for r in response.json()["results"]]
     assert urls == ["https://notexample.com/three", "https://other.test/articles/example.com"]
+
+
+def test_search_preserves_upstream_diagnostics(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
+    monkeypatch.setattr(main, "http_client", UnresponsiveFakeSearxngClient())
+
+    response = client.get("/search", params={"q": "backend outage", "count": 1})
+
+    assert response.status_code == 200
+    meta = response.json()["meta"]
+    assert meta["total"] == 0
+    assert meta["upstream_status"] == "degraded"
+    assert meta["unresponsive_engines"] == ["duckduckgo", "brave"]
+    assert "duckduckgo: timeout" in meta["upstream_errors"]
+    assert "all engines failed" in meta["upstream_errors"]
+
+
+def test_health_degrades_when_search_probe_has_no_results(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
+    monkeypatch.setattr(main, "http_client", UnresponsiveFakeSearxngClient())
+
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "degraded"
+    assert data["searxng_available"] is True
+    assert data["search_available"] is False
+    assert data["upstream_status"] == "degraded"
+    assert data["unresponsive_engines"] == ["duckduckgo", "brave"]
 
 
 def test_query_database_async_methods_use_bounded_sqlite(tmp_path) -> None:
