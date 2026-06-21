@@ -31,7 +31,7 @@ import asyncio
 import secrets
 from collections import defaultdict
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import AsyncGenerator
 from urllib.parse import urlparse
 
@@ -47,7 +47,7 @@ from app.query_expansion import generate_query_variations
 from app.evolver import Evolver
 from app.source_tracer import trace_sources, get_institution_registry
 from app.database import query_db
-from app.search_providers import provider_by_name
+from app.search_providers import provider_by_name, providers_catalog
 from app.models import (
     AdaptReportRequest,
     AdaptStatsResponse,
@@ -243,6 +243,29 @@ class SearxngQueryResponse:
             self.unresponsive_engines = []
 
 
+@dataclass
+class ProviderAttemptStats:
+    """Rolling in-memory provider telemetry from real search attempts."""
+
+    source: str
+    name: str
+    attempts: int = 0
+    successes: int = 0
+    degraded: int = 0
+    errors: int = 0
+    empty: int = 0
+    total_raw_results: int = 0
+    latencies_ms: list[float] = field(default_factory=list)
+    last_status: str = "unknown"
+    last_error: str | None = None
+    last_attempt_at: float | None = None
+    last_success_at: float | None = None
+
+
+_provider_attempt_stats: dict[str, ProviderAttemptStats] = {}
+_PROVIDER_LATENCY_WINDOW = 200
+
+
 @dataclass(frozen=True)
 class EngineDescriptor:
     """Enabled SearXNG engine metadata used to validate engine requests."""
@@ -282,12 +305,16 @@ def _provider_pack(provider: str, label: str | None = None) -> SearchStrategyPac
 SEARCH_STRATEGY_MODES: dict[str, tuple[SearchStrategyPack, ...]] = {
     "general": (
         _searxng_pack("bing"),
-        _searxng_pack("duckduckgo", "brave", "google", "startpage"),
+        _searxng_pack("duckduckgo", "brave"),
+        _provider_pack("wikipedia", "wikipedia"),
+        _provider_pack("wikidata", "wikidata"),
+        _provider_pack("hackernews", "hackernews"),
     ),
     "code": (
         _provider_pack("github", "github"),
         _provider_pack("mdn", "mdn"),
         _provider_pack("docker_hub", "docker hub"),
+        _provider_pack("pypi", "pypi"),
     ),
     "academic": (
         _provider_pack("arxiv", "arxiv"),
@@ -296,15 +323,26 @@ SEARCH_STRATEGY_MODES: dict[str, tuple[SearchStrategyPack, ...]] = {
         _provider_pack("semantic_scholar", "semantic scholar"),
     ),
     "news": (
-        _searxng_pack("reuters", "yahoo news", "bing news"),
+        _searxng_pack("reuters", "bing news", "duckduckgo news", "wikinews"),
     ),
     "private": (
         _provider_pack("github", "github"),
         _provider_pack("mdn", "mdn"),
         _provider_pack("docker_hub", "docker hub"),
+        _provider_pack("pypi", "pypi"),
+        _provider_pack("wikipedia", "wikipedia"),
+        _provider_pack("wikidata", "wikidata"),
+        _provider_pack("hackernews", "hackernews"),
         _provider_pack("arxiv", "arxiv"),
         _provider_pack("crossref", "crossref"),
         _provider_pack("semantic_scholar", "semantic scholar"),
+    ),
+    "reference": (
+        _provider_pack("wikipedia", "wikipedia"),
+        _provider_pack("wikidata", "wikidata"),
+    ),
+    "community": (
+        _provider_pack("hackernews", "hackernews"),
     ),
 }
 
@@ -390,6 +428,137 @@ def _upstream_error_response(exc: Exception) -> SearxngQueryResponse:
         upstream_status="error",
         upstream_errors=[f"SearXNG error: {_safe_log_value(exc)}"],
     )
+
+
+def _record_searxng_attempt(name: str, upstream: SearxngQueryResponse) -> None:
+    _record_provider_attempt(
+        source="searxng",
+        name=name,
+        raw_results=len(upstream.results),
+        upstream_status=upstream.upstream_status,
+        response_time_ms=upstream.response_time_ms,
+        upstream_errors=upstream.upstream_errors,
+        unresponsive_engines=upstream.unresponsive_engines,
+    )
+
+
+def _record_searxng_error_attempt(name: str, exc: Exception, start: float) -> None:
+    upstream = _upstream_error_response(exc)
+    upstream.response_time_ms = round((time.time() - start) * 1000, 1)
+    _record_searxng_attempt(name, upstream)
+
+
+def _stats_key(source: str, name: str) -> str:
+    return f"{source}:{name}"
+
+
+def _format_ts(value: float | None) -> str | None:
+    if value is None:
+        return None
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(value))
+
+
+def _percentile(values: list[float], percentile: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    index = min(len(ordered) - 1, max(0, round((len(ordered) - 1) * percentile)))
+    return round(ordered[index], 1)
+
+
+def _record_provider_attempt(
+    source: str,
+    name: str,
+    raw_results: int,
+    upstream_status: str,
+    response_time_ms: float,
+    upstream_errors: list[str] | None = None,
+    unresponsive_engines: list[str] | None = None,
+) -> None:
+    key = _stats_key(source, name)
+    stats = _provider_attempt_stats.get(key)
+    if stats is None:
+        stats = ProviderAttemptStats(source=source, name=name)
+        _provider_attempt_stats[key] = stats
+
+    now = time.time()
+    errors = upstream_errors or []
+    unresponsive = unresponsive_engines or []
+
+    stats.attempts += 1
+    stats.total_raw_results += max(raw_results, 0)
+    stats.last_status = upstream_status
+    stats.last_attempt_at = now
+    stats.latencies_ms.append(max(response_time_ms, 0.0))
+    if len(stats.latencies_ms) > _PROVIDER_LATENCY_WINDOW:
+        del stats.latencies_ms[: len(stats.latencies_ms) - _PROVIDER_LATENCY_WINDOW]
+
+    if raw_results > 0 and upstream_status == "ok":
+        stats.successes += 1
+        stats.last_success_at = now
+    if raw_results == 0:
+        stats.empty += 1
+    if upstream_status == "degraded":
+        stats.degraded += 1
+    if upstream_status == "error":
+        stats.errors += 1
+    if errors or unresponsive:
+        stats.last_error = "; ".join([*errors, *[f"unresponsive: {engine}" for engine in unresponsive]])[:500]
+    elif upstream_status == "ok":
+        stats.last_error = None
+
+
+def _provider_stats_row(stats: ProviderAttemptStats) -> dict:
+    attempts = max(stats.attempts, 1)
+    direct_engine_names = {
+        item["name"]: item["engine_name"]
+        for item in providers_catalog()
+    }
+    engine_name = direct_engine_names.get(stats.name, stats.name)
+    avg_latency = round(sum(stats.latencies_ms) / len(stats.latencies_ms), 1) if stats.latencies_ms else 0.0
+    success_rate = round(stats.successes / attempts, 3)
+    empty_rate = round(stats.empty / attempts, 3)
+    error_rate = round(stats.errors / attempts, 3)
+    if stats.attempts == 0:
+        health = "unknown"
+    elif stats.last_status == "error" or error_rate >= 0.5:
+        health = "error"
+    elif stats.last_status == "degraded" or empty_rate >= 0.5:
+        health = "degraded"
+    elif success_rate >= 0.5:
+        health = "healthy"
+    else:
+        health = "degraded"
+
+    return {
+        "source": stats.source,
+        "name": stats.name,
+        "engine_name": engine_name,
+        "health": health,
+        "attempts": stats.attempts,
+        "successes": stats.successes,
+        "degraded": stats.degraded,
+        "errors": stats.errors,
+        "empty": stats.empty,
+        "success_rate": success_rate,
+        "empty_rate": empty_rate,
+        "error_rate": error_rate,
+        "total_raw_results": stats.total_raw_results,
+        "avg_raw_results": round(stats.total_raw_results / attempts, 2),
+        "avg_latency_ms": avg_latency,
+        "p95_latency_ms": _percentile(stats.latencies_ms, 0.95),
+        "last_status": stats.last_status,
+        "last_error": stats.last_error,
+        "last_attempt_at": _format_ts(stats.last_attempt_at),
+        "last_success_at": _format_ts(stats.last_success_at),
+    }
+
+
+def _provider_stats_snapshot() -> list[dict]:
+    return [
+        _provider_stats_row(stats)
+        for _, stats in sorted(_provider_attempt_stats.items(), key=lambda item: item[0])
+    ]
 
 
 def _engine_key(value: str) -> str:
@@ -670,6 +839,16 @@ async def _search_strategy_impl(
             if engine_selection
             else [pack.label or pack.source]
         )
+        stats_name = engine_selection.value if engine_selection else (pack.provider or pack.label or pack.source)
+        _record_provider_attempt(
+            source=pack.source,
+            name=stats_name,
+            raw_results=len(upstream.results),
+            upstream_status=upstream.upstream_status,
+            response_time_ms=getattr(upstream, "response_time_ms", 0.0),
+            upstream_errors=upstream.upstream_errors,
+            unresponsive_engines=upstream.unresponsive_engines,
+        )
         engine_attempts.append({
             "mode": normalized_mode,
             "source": pack.source,
@@ -734,7 +913,7 @@ async def search(
     q: str = Query(..., description="Search query"),
     count: int = Query(10, ge=1, le=50, description="Number of results"),
     engines: str | None = Query(None, description="Comma-separated engine names"),
-    mode: str | None = Query(None, description="Named strategy: general, code, academic, news, or private"),
+    mode: str | None = Query(None, description="Named strategy: general, code, academic, news, private, reference, or community"),
     domain: str | None = Query(None, description="Filter results to this domain"),
     exclude_domains: str | None = Query(None, description="Comma-separated domains to exclude"),
     fetch: bool = Query(False, description="Fetch page content via kill chain"),
@@ -778,7 +957,10 @@ async def search(
     try:
         upstream = await _query_searxng(query_text, count * 2, resolved_engines or None)
     except httpx.HTTPError as e:
+        _record_searxng_error_attempt(resolved_engines or "default", e, start)
         raise HTTPException(status_code=502, detail=f"SearXNG error: {e}")
+
+    _record_searxng_attempt(resolved_engines or "default", upstream)
 
     results = deduplicate_with_scoring(upstream.results)
     results = _filter_search_results(results, domain=domain, exclude_domains=exclude_domains)[:count]
@@ -812,7 +994,7 @@ async def search(
 @app.get("/search/strategy", response_model=SearchResponse)
 async def search_strategy(
     q: str = Query(..., description="Search query"),
-    mode: str = Query("general", description="Named strategy: general, code, academic, news, or private"),
+    mode: str = Query("general", description="Named strategy: general, code, academic, news, private, reference, or community"),
     count: int = Query(10, ge=1, le=50, description="Number of results"),
     domain: str | None = Query(None, description="Filter results to this domain"),
     exclude_domains: str | None = Query(None, description="Comma-separated domains to exclude"),
@@ -834,7 +1016,7 @@ async def search_extract(
     q: str = Query(..., description="Search query"),
     count: int = Query(5, ge=1, le=20, description="Number of results"),
     engines: str | None = Query(None, description="Comma-separated engine names"),
-    mode: str | None = Query(None, description="Named strategy: general, code, academic, news, or private"),
+    mode: str | None = Query(None, description="Named strategy: general, code, academic, news, private, reference, or community"),
 ) -> SearchResponse:
     """Search and extract content from top results via kill chain."""
     return await search(q=q, count=count, engines=engines, mode=mode, domain=None, exclude_domains=None, fetch=True)
@@ -1189,7 +1371,7 @@ async def read_batch(body: BatchReadRequest) -> BatchReadResponse:
 # NEWS ENDPOINT
 # =========================================================================
 
-NEWS_ENGINES = "google news,bing news,duckduckgo news,yahoo news,brave.news,startpage news,qwant news,wikinews,reuters"
+NEWS_ENGINES = "reuters,bing news,duckduckgo news,wikinews"
 
 
 @app.get("/news", response_model=NewsResponse)
@@ -1210,7 +1392,10 @@ async def news(
     try:
         upstream = await _query_searxng(q, count * 3, engines=news_engines, categories="news")
     except httpx.HTTPError as e:
+        _record_searxng_error_attempt(news_engines, e, start)
         raise HTTPException(status_code=502, detail=f"SearXNG error: {e}")
+
+    _record_searxng_attempt(news_engines, upstream)
 
     # Deduplicate and build news results
     seen_urls: set[str] = set()
@@ -1456,6 +1641,69 @@ async def health() -> HealthResponse:
         **upstream_meta,
     )
     return response
+
+
+@app.get("/providers/stats")
+async def providers_stats() -> dict:
+    """Return rolling in-memory stats for provider and SearXNG attempts."""
+    providers = _provider_stats_snapshot()
+    return {
+        "total": len(providers),
+        "telemetry_scope": "in-memory live attempts since process start",
+        "known_direct_providers": providers_catalog(),
+        "providers": providers,
+    }
+
+
+@app.get("/providers/health")
+async def providers_health() -> dict:
+    """Summarize provider health from recorded live attempts."""
+    observed = _provider_stats_snapshot()
+    rows_by_key = {
+        _stats_key(row["source"], row["name"]): row
+        for row in observed
+    }
+
+    providers: list[dict] = []
+    for item in providers_catalog():
+        key = _stats_key("provider", item["name"])
+        providers.append(rows_by_key.pop(key, {
+            "source": "provider",
+            "name": item["name"],
+            "engine_name": item["engine_name"],
+            "health": "unknown",
+            "attempts": 0,
+            "successes": 0,
+            "degraded": 0,
+            "errors": 0,
+            "empty": 0,
+            "success_rate": 0.0,
+            "empty_rate": 0.0,
+            "error_rate": 0.0,
+            "last_status": "unknown",
+            "last_error": None,
+            "last_attempt_at": None,
+            "last_success_at": None,
+        }))
+    providers.extend(rows_by_key.values())
+
+    attempted = [row for row in providers if row.get("attempts", 0) > 0]
+    if not attempted:
+        status = "unknown"
+    elif any(row.get("health") == "error" for row in attempted):
+        status = "degraded"
+    elif any(row.get("health") == "degraded" for row in attempted):
+        status = "degraded"
+    else:
+        status = "healthy"
+
+    return {
+        "status": status,
+        "telemetry_scope": "in-memory live attempts since process start",
+        "attempted": len(attempted),
+        "total": len(providers),
+        "providers": providers,
+    }
 
 
 @app.get("/engines", response_model=list[EngineInfo])
