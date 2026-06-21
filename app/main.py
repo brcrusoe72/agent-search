@@ -76,8 +76,6 @@ VERSION = "2.0.0"
 HEALTHCHECK_QUERY = os.getenv("HEALTHCHECK_QUERY", "python programming language")
 HEALTHCHECK_ENGINES = os.getenv("HEALTHCHECK_ENGINES", "github")
 HEALTHCHECK_SEARCH_TIMEOUT = float(os.getenv("HEALTHCHECK_SEARCH_TIMEOUT", "15"))
-HEALTHCHECK_CACHE_TTL = float(os.getenv("HEALTHCHECK_CACHE_TTL", "15"))
-ENGINE_CATALOG_CACHE_TTL = float(os.getenv("ENGINE_CATALOG_CACHE_TTL", "300"))
 
 # Request logging
 logging.basicConfig(
@@ -97,8 +95,6 @@ cache = Cache(ttl=CACHE_TTL)
 content_cache: ContentCache | None = None
 evolver: Evolver | None = None
 http_client: httpx.AsyncClient | None = None
-_health_cache: tuple[float, HealthResponse] | None = None
-_engine_catalog_cache: tuple[float, dict[str, "EngineDescriptor"]] | None = None
 
 
 @asynccontextmanager
@@ -406,11 +402,7 @@ def _split_engine_list(value: str) -> list[str]:
 
 async def _enabled_engine_catalog() -> dict[str, EngineDescriptor]:
     """Return enabled engines keyed by normalized name and shortcut."""
-    global _engine_catalog_cache
     assert http_client is not None
-    now = time.time()
-    if _engine_catalog_cache and now - _engine_catalog_cache[0] < ENGINE_CATALOG_CACHE_TTL:
-        return _engine_catalog_cache[1]
 
     resp = await http_client.get(f"{SEARXNG_URL}/config", timeout=5.0)
     resp.raise_for_status()
@@ -432,7 +424,6 @@ async def _enabled_engine_catalog() -> dict[str, EngineDescriptor]:
         if descriptor.shortcut:
             catalog[_engine_key(descriptor.shortcut)] = descriptor
 
-    _engine_catalog_cache = (now, catalog)
     return catalog
 
 
@@ -1426,11 +1417,7 @@ async def search_jobs(
 @app.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
     """Health check — verifies SearXNG and live search connectivity."""
-    global _health_cache
     assert http_client is not None
-    now = time.time()
-    if _health_cache and now - _health_cache[0] < HEALTHCHECK_CACHE_TTL:
-        return _health_cache[1]
 
     searxng_ok = False
     search_available = False
@@ -1468,7 +1455,6 @@ async def health() -> HealthResponse:
         version=VERSION,
         **upstream_meta,
     )
-    _health_cache = (now, response)
     return response
 
 
