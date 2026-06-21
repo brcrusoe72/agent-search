@@ -735,6 +735,37 @@ def test_news_records_searxng_error_attempt(monkeypatch: pytest.MonkeyPatch, cli
     assert "SearXNG error" in row["last_error"]
 
 
+def test_strategy_coverage_preserves_successful_provider_rows() -> None:
+    def result(title: str, url: str, engine: str, position: int) -> main.SearchResult:
+        return main.SearchResult(
+            title=title,
+            url=url,
+            snippet="snippet",
+            engines=[engine],
+            score=100 - position,
+            position=position,
+        )
+
+    github_results = [
+        result(f"github {index}", f"https://github.com/example/{index}", "github", index)
+        for index in range(1, 8)
+    ]
+    docker_result = result("docker", "https://hub.docker.com/r/example/app", "docker hub", 8)
+    pypi_result = result("pypi", "https://pypi.org/project/example/", "pypi", 9)
+
+    selected = main._ensure_strategy_coverage(
+        ranked_results=github_results,
+        coverage_groups=[github_results, [docker_result], [pypi_result]],
+        count=5,
+    )
+
+    assert selected[0].engines == ["github"]
+    assert len(selected) == 5
+    assert "docker hub" in {engine for item in selected for engine in item.engines}
+    assert "pypi" in {engine for item in selected for engine in item.engines}
+    assert [item.position for item in selected] == [1, 2, 3, 4, 5]
+
+
 def test_domain_filter_does_not_site_scope_non_web_engines(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
     fake = EngineAwareFakeSearxngClient()
     monkeypatch.setattr(main, "http_client", fake)
