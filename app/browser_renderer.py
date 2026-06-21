@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 
 from app.domain_trust import TrustResult, evaluate_trust
-from app.killchain import (
+from app.fetch_policy import (
     MAX_CONTENT_CHARS,
     MIN_USEFUL_CHARS,
     USER_AGENTS,
@@ -248,6 +248,7 @@ async def render_browser_page(
             try:
                 await page.wait_for_load_state("networkidle", timeout=min(3000, effective_timeout_ms))
             except PlaywrightTimeoutError:
+                # Network-idle is best effort; DOM content is enough for extraction.
                 pass
 
             final_url = page.url
@@ -272,6 +273,15 @@ async def render_browser_page(
             except Exception:
                 body_text = ""
 
+            status = response.status if response is not None else None
+            if status is not None and status >= 400:
+                return _result(
+                    final_url=final_url,
+                    title=title,
+                    error=f"Rendered navigation returned HTTP {status}",
+                    blocked_reason="http_error",
+                )
+
             challenge_detected = detect_browser_challenge(title, body_text, html)
             if challenge_detected:
                 return _result(
@@ -291,7 +301,6 @@ async def render_browser_page(
             links = _extract_links(raw_links if isinstance(raw_links, list) else [], effective_max_links)
             content = extract_rendered_content(html, body_text, effective_max_chars)
             if not content:
-                status = response.status if response is not None else None
                 return _result(
                     final_url=final_url,
                     title=title,
@@ -314,9 +323,11 @@ async def render_browser_page(
             try:
                 await context.close()
             except Exception:
+                # Playwright may already close the context after navigation-level failures.
                 pass
         if browser is not None:
             try:
                 await browser.close()
             except Exception:
+                # Browser teardown should not override the render result.
                 pass

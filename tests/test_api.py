@@ -862,6 +862,80 @@ def test_browser_render_ignores_close_errors(monkeypatch: pytest.MonkeyPatch) ->
     assert result.links[0].url == "https://example.com/docs"
 
 
+def test_browser_render_rejects_http_error_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeLocator:
+        async def inner_text(self, timeout: int) -> str:
+            return "Rendered error page content " * 20
+
+    class FakePage:
+        url = "https://example.com/missing"
+
+        async def route(self, pattern: str, handler) -> None:
+            return None
+
+        async def goto(self, url: str, wait_until: str, timeout: int):
+            self.url = url
+            return types.SimpleNamespace(status=404)
+
+        async def wait_for_load_state(self, state: str, timeout: int) -> None:
+            return None
+
+        async def title(self) -> str:
+            return "Not Found"
+
+        async def content(self) -> str:
+            return "<html><body><main>Rendered error page content " * 20 + "</main></body></html>"
+
+        def locator(self, selector: str) -> FakeLocator:
+            return FakeLocator()
+
+    class FakeContext:
+        async def new_page(self) -> FakePage:
+            return FakePage()
+
+        async def close(self) -> None:
+            return None
+
+    class FakeBrowser:
+        async def new_context(self, **kwargs) -> FakeContext:
+            return FakeContext()
+
+        async def close(self) -> None:
+            return None
+
+    class FakeChromium:
+        async def launch(self, **kwargs) -> FakeBrowser:
+            return FakeBrowser()
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+
+    class FakePlaywrightManager:
+        async def __aenter__(self) -> FakePlaywright:
+            return FakePlaywright()
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    fake_async_api = types.ModuleType("playwright.async_api")
+    fake_async_api.TimeoutError = TimeoutError
+    fake_async_api.async_playwright = lambda: FakePlaywrightManager()
+    fake_playwright = types.ModuleType("playwright")
+    fake_playwright.async_api = fake_async_api
+
+    monkeypatch.setitem(sys.modules, "playwright", fake_playwright)
+    monkeypatch.setitem(sys.modules, "playwright.async_api", fake_async_api)
+    monkeypatch.setattr(browser_renderer, "is_safe_url", lambda url, verbose=False: True)
+    monkeypatch.setattr(browser_renderer, "_default_chromium_path", lambda: "/usr/bin/chromium")
+
+    result = asyncio.run(browser_renderer.render_browser_page("https://example.com/missing"))
+
+    assert result.success is False
+    assert result.content is None
+    assert result.blocked_reason == "http_error"
+    assert result.error == "Rendered navigation returned HTTP 404"
+
+
 def test_strategy_coverage_preserves_successful_provider_rows() -> None:
     def result(title: str, url: str, engine: str, position: int) -> main.SearchResult:
         return main.SearchResult(
