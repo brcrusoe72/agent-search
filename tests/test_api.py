@@ -315,8 +315,6 @@ def isolated_app_state(monkeypatch: pytest.MonkeyPatch, tmp_path):
     monkeypatch.setattr(main, "content_cache", None)
     monkeypatch.setattr(main, "evolver", None)
     monkeypatch.setattr(main, "cache", Cache(ttl=3600))
-    monkeypatch.setattr(main, "_health_cache", None)
-    monkeypatch.setattr(main, "_engine_catalog_cache", None)
     monkeypatch.setattr(main, "query_db", QueryDatabase(str(tmp_path / "query_log.db")))
     main._rate_store.clear()
     main._global_timestamps.clear()
