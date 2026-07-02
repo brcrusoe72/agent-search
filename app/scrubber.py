@@ -167,6 +167,26 @@ XSS_PATTERNS = [
     r"(?i)window\.location",
 ]
 
+# Patterns too broad for redaction — file paths/filenames, not injection vectors.
+# Detected (flagged as threats) but NOT redacted from content.
+_NO_REDACT_PATTERNS: frozenset[str] = frozenset({
+    r"(?i)/etc/passwd",
+    r"(?i)/etc/shadow",
+    r"(?i)(?:\.env|config\.json|settings\.py|secrets\.json)",
+})
+
+# XSS detection patterns match opening tags/attributes; redaction must match
+# the whole construct (script block, event-handler value, etc.).
+_XSS_REDACTION_PATTERNS: list[tuple[str, str]] = [
+    (r"<script[^>]*>[\s\S]*?</script>", "[REDACTED]"),
+    (r"(?i)javascript\s*:[^\s\"']*", "[REDACTED]"),
+    (r"(?i)on(?:error|load|click)\s*=[^\s>]*", "[REDACTED]"),
+    (r"(?i)document\.cookie", "[REDACTED]"),
+    (r"(?i)\.innerHTML\s*=[^\n;]*", "[REDACTED]"),
+    (r"(?i)eval\s*\([^)]*\)", "[REDACTED]"),
+    (r"(?i)window\.location\s*=[^\n;]*", "[REDACTED]"),
+]
+
 # Semantic intent vocabularies
 INTENT_VOCABULARIES = {
     "override": {"ignore", "disregard", "bypass", "override", "cancel", "replace", "substitute", "forget"},
@@ -475,46 +495,44 @@ class ContentScrubber:
     def _clean_content(
         self, text: str, threats: list[ThreatDetection], risk_score: float
     ) -> tuple[str, int]:
-        """Clean content with targeted redaction. Returns (cleaned_text, redaction_count)."""
-        if risk_score < 0.1:
+        """Redact detected threat patterns from content.
+
+        Redaction uses the same pattern lists as detection (no drift).
+        File-path patterns in _NO_REDACT_PATTERNS are detected but not redacted.
+        XSS uses redaction-specific patterns from _XSS_REDACTION_PATTERNS.
+        High-risk content (>0.8) is truncated AFTER redaction, not before.
+        """
+        if not threats:
             return text, 0
 
-        redactions = 0
         cleaned = text
+        redactions = 0
 
-        # High risk: prefix warning, truncate if extreme
+        # Redact injection, exfiltration, impersonation patterns from detection lists
+        for pattern in INJECTION_PATTERNS + EXFILTRATION_PATTERNS + IMPERSONATION_PATTERNS:
+            if pattern in _NO_REDACT_PATTERNS:
+                continue
+            try:
+                cleaned, count = re.subn(pattern, "[REDACTED]", cleaned)
+                redactions += count
+            except re.error as exc:
+                logger.debug("Redaction pattern failed: %s", exc)
+
+        # Redact XSS using redaction-specific patterns
+        for pattern, replacement in _XSS_REDACTION_PATTERNS:
+            try:
+                cleaned, count = re.subn(pattern, replacement, cleaned)
+                redactions += count
+            except re.error as exc:
+                logger.debug("XSS redaction pattern failed: %s", exc)
+
+        # High risk: prepend warning and truncate AFTER redaction
         if risk_score > 0.8:
-            n_threats = len(threats)
             header = (
-                f"[⚠️ CONTENT FLAGGED: {n_threats} threats detected "
+                f"[⚠️ CONTENT FLAGGED: {len(threats)} threats detected "
                 f"(risk={risk_score:.2f}). Treating as potentially adversarial.]\n\n"
             )
             cleaned = header + cleaned[:3000]
-            redactions += 1
-            return cleaned, redactions
-
-        # Targeted cleaning for specific patterns
-        redaction_patterns = [
-            # Injection
-            (r"(?i)ignore\s+(?:all\s+)?(?:previous\s+)?instructions[^\w]*", "[REDACTED]"),
-            (r"(?i)system\s*:\s*you\s+are\s+now[^\n]*", "[REDACTED]"),
-            (r"(?i)(?:forget|disregard)\s+(?:all\s+)?instructions[^\w]*", "[REDACTED]"),
-            (r"(?i)developer\s+mode[^\w]*", "[REDACTED]"),
-            (r"(?i)DAN\s+mode[^\w]*", "[REDACTED]"),
-            (r"(?i)jailbreak[^\w]*", "[REDACTED]"),
-            # XSS
-            (r"<script[^>]*>.*?</script>", "[REDACTED]"),
-            (r"(?i)javascript\s*:[^\s\"']*", "[REDACTED]"),
-            (r"(?i)on(?:error|load|click)\s*=[^\s>]*", "[REDACTED]"),
-            # System prompt leakage hooks
-            (r"(?i)(?:show|reveal|dump)\s+(?:your\s+)?(?:system\s+)?(?:prompt|instructions)[^\w]*", "[REDACTED]"),
-        ]
-
-        for pattern, replacement in redaction_patterns:
-            matches = re.findall(pattern, cleaned)
-            if matches:
-                redactions += len(matches)
-                cleaned = re.sub(pattern, replacement, cleaned)
 
         return cleaned, redactions
 
