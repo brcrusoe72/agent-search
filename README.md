@@ -1,6 +1,6 @@
 # AgentSearch
 
-Self-hosted search API for AI agents. 17 endpoints. Kill-chain content extraction with optional browser rendering. Optional Tor-anonymized stack. No third-party search API keys, no per-query fees, no vendor lock-in. Optional local bearer auth is supported.
+Self-hosted search API for AI agents. 17 endpoints. Layered content extraction with optional browser rendering. Optional Tor-anonymized stack. No third-party search API keys, no per-query fees, no vendor lock-in. Optional local bearer auth is supported.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![PyPI](https://img.shields.io/pypi/v/agentsearch-client)](https://pypi.org/project/agentsearch-client/)
 
@@ -76,11 +76,11 @@ pytest tests/test_live_docker.py -q
 
 ## What it does
 
-AgentSearch wraps [SearXNG](https://github.com/searxng/searxng) with a FastAPI layer that adds everything LLM agents actually need: deduplication, cross-engine scoring, content extraction, query expansion, domain trust scoring, prompt injection scrubbing, and self-improvement.
+AgentSearch wraps [SearXNG](https://github.com/searxng/searxng) with a FastAPI layer that adds the pieces agents usually need on top of raw search: deduplication, cross-engine scoring, content extraction, query expansion, domain trust scoring, prompt injection scrubbing, and failure-pattern analysis.
 
 **Standard stack** — `docker compose up` gives you search on `:3939`.
 
-**Private stack** — `docker compose -f docker-compose.yml -f examples/compose.private.yml up` adds an anonymized instance on `:3940` that routes all traffic through Tor with Snowflake obfuscation. Encrypted DNS via CoreDNS → Cloudflare DoT. Network-level isolation — the private stack physically cannot egress without Tor.
+**Private stack** — `docker compose -f docker-compose.yml -f examples/compose.private.yml up` adds an anonymized instance on `:3940` that routes all traffic through Tor with Snowflake obfuscation. Encrypted DNS via CoreDNS → Cloudflare DoT. Network-level isolation — the private SearXNG instance runs on an internal-only Docker network with no route to the internet except through Tor.
 
 ## Search engines
 
@@ -100,16 +100,16 @@ Strategy modes can also use direct no-key providers for vertical search. These d
 
 ## Why not just use SearXNG directly?
 
-SearXNG finds pages. AgentSearch finds pages, reads them, scores them, deduplicates them, caches them, scrubs prompt injections out of them, detects paywalls, falls back through escalating extraction strategies when the first one fails, and gets better at it over time. One API call.
+SearXNG finds pages. AgentSearch fetches and reads them, scores and deduplicates the results, caches them, scrubs prompt injections, detects paywalls, and falls back through several extraction strategies when the first one fails — in one API call. It also logs fetch outcomes so you can see which strategies and domains are actually working.
 
 | | AgentSearch | Tavily | Exa | SerpAPI | Raw SearXNG |
 |---|---|---|---|---|---|
 | **Cost** | Free | $0.005/query | $0.001/query | $50/mo | Free |
 | **Self-hosted** | ✅ | ❌ | ❌ | ❌ | ✅ |
-| **Content extraction** | Kill chain + browser renderer | Basic | Basic | ❌ | ❌ |
+| **Content extraction** | Multi-strategy + browser renderer | Basic | Basic | ❌ | ❌ |
 | **Deduplication** | Cross-engine | ❌ | ❌ | ❌ | ❌ |
 | **Prompt injection scrubbing** | ✅ | ❌ | ❌ | ❌ | ❌ |
-| **Self-improving** | ✅ (evolver) | ❌ | ❌ | ❌ | ❌ |
+| **Adaptive (failure analysis)** | ✅ (evolver) | ❌ | ❌ | ❌ | ❌ |
 | **Tor anonymization** | Optional | ❌ | ❌ | ❌ | Manual |
 
 ## Endpoints
@@ -133,11 +133,11 @@ SearXNG finds pages. AgentSearch finds pages, reads them, scores them, deduplica
 
 | Endpoint | Method | What it does |
 |---|---|---|
-| `/read` | GET | Kill chain extraction for any URL |
+| `/read` | GET | Escalating extraction for any URL |
 | `/read/batch` | POST | Concurrent multi-URL extraction in one request |
 | `/providers/browser/fetch` | GET | Ephemeral browser render/extract for JS-rendered target pages |
 
-The kill chain escalates through strategies until one succeeds:
+The extraction chain escalates through strategies until one succeeds:
 
 1. Direct fetch + smart content selectors
 2. Readability scoring (paragraph density vs link density)
@@ -152,13 +152,13 @@ The kill chain escalates through strategies until one succeeds:
 
 Every request gets SSRF protection, prompt injection detection, paywall detection, and content length caps automatically. The browser renderer uses an ephemeral context, blocks high-cost resource types by default, and reports CAPTCHA/challenge pages instead of trying to bypass them. It is for rendering target pages, not for scraping blocked search-result pages.
 
-### Self-improvement
+### Adaptation
 
 | Endpoint | Method | What it does |
 |---|---|---|
 | `/adapt/report` | POST | Report a fetch failure for a URL |
 | `/adapt/stats` | GET | View adaptation metrics and failure patterns |
-| `/adapt/evolve` | POST | Trigger self-improvement cycle — analyzes failures, tunes config |
+| `/adapt/evolve` | POST | Trigger an adaptation cycle — analyzes failures, tunes config |
 
 ### Infrastructure
 
@@ -208,7 +208,7 @@ curl "http://localhost:3939/search/deep?q=ethon+industrial+ai+platform&count=10"
 
 Server-side query variation + parallel execution + result fusion. Surfaces results that flat `/search` misses.
 
-### Read a URL (kill chain)
+### Read a URL (escalating extraction)
 
 ```bash
 curl "http://localhost:3939/read?url=https://example.com/paywalled-article"
@@ -380,7 +380,7 @@ Port 3939 (direct)                    Port 3940 (Tor-anonymized)
 | `scrubber.py` | 539 | Prompt injection detection and content sanitization |
 | `source_library.py` | 310 | Curated institutional source registry |
 | `domain_trust.py` | 311 | Domain trust scoring (TLD, age, reputation) |
-| `evolver.py` | 301 | Self-improvement engine — failure analysis → config tuning |
+| `evolver.py` | 301 | Adaptation engine — failure analysis → config tuning |
 | `content_cache.py` | 241 | URL-keyed content cache with TTL |
 | `query_expansion.py` | 201 | Server-side query variation and fusion |
 
