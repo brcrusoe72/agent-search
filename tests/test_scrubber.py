@@ -1,8 +1,6 @@
 """Tests for the content scrubber's detection and redaction pipeline."""
 from __future__ import annotations
 
-import pytest
-
 from app.scrubber import scrub_content
 
 
