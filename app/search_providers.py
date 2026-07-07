@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import time
 import xml.etree.ElementTree as ET
@@ -565,6 +566,39 @@ class SemanticScholarProvider(SearchProvider):
         return results
 
 
+class SerpBaseProvider(SearchProvider):
+    name = "serpbase"
+    engine_name = "serpbase (Google)"
+
+    async def _search(self, client: httpx.AsyncClient, query: str, count: int) -> list[dict]:
+        api_key = os.environ.get("SERPBASE_API_KEY", "").strip()
+        if not api_key:
+            return []
+        resp = await client.get(
+            "https://api.serpbase.dev/google/search",
+            params={"q": query, "num": min(max(count, 1), 100), "api_key": api_key},
+            headers=DEFAULT_PROVIDER_HEADERS,
+            timeout=self.timeout,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        organic = data.get("organic_results", [])
+        if not isinstance(organic, list):
+            return []
+        results: list[dict] = []
+        for item in organic:
+            if not isinstance(item, dict):
+                continue
+            results.append(self._result(
+                item.get("title"),
+                item.get("link"),
+                item.get("snippet") or "",
+            ))
+            if len(results) >= count * 3:
+                break
+        return results
+
+
 PROVIDERS: dict[str, SearchProvider] = {
     "mdn": MDNProvider(),
     "github": GitHubProvider(),
@@ -578,4 +612,5 @@ PROVIDERS: dict[str, SearchProvider] = {
     "crossref": CrossrefProvider(),
     "openalex": OpenAlexProvider(),
     "semantic_scholar": SemanticScholarProvider(),
+    "serpbase": SerpBaseProvider(),
 }
