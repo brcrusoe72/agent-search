@@ -10,15 +10,15 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
-    "fastapi==0.115.6",
-    "uvicorn[standard]==0.34.0",
+    "fastapi==0.139.0",
+    "uvicorn[standard]==0.51.0",
     "httpx[socks]==0.28.1",
-    "pydantic==2.10.4",
-    "beautifulsoup4==4.12.2",
+    "pydantic==2.13.4",
+    "beautifulsoup4==4.15.0",
     "pdfplumber>=0.11.4,<0.12",
-    "lxml==6.1.0",
+    "lxml==6.1.1",
     "playwright>=1.50,<2",
-    "requests[socks]==2.33.0",
+    "requests[socks]==2.34.2",
     "yt-dlp>=2025.3.31",
     "python-whois>=0.9.4",
 ]
