@@ -96,7 +96,7 @@ Run `./scripts/prepare-searxng.sh` to create ignored local runtime files at `sea
 
 Because SearXNG is configured with `use_default_settings: true`, your live instance may expose additional enabled engines from the installed SearXNG catalog. Use the `engines=` query parameter to request specific engines, and use `/engines` to verify what is available in that deployment.
 
-Strategy modes can also use direct no-key providers for vertical search. These do not require paid search APIs: GitHub repository search, MDN search, Docker Hub search, PyPI package metadata, Wikipedia, Wikidata, Hacker News, arXiv, Crossref, OpenAlex, and Semantic Scholar are called directly when a mode selects them. SearXNG remains the broad-web provider for Google/Bing/Brave/DuckDuckGo-style engines, but Google, Startpage, Yahoo, and Reddit are best-effort explicit sources rather than defaults because they are commonly blocked or empty.
+Strategy modes can also use direct no-key providers for vertical search. These do not require paid search APIs: GitHub repository search, MDN search, Docker Hub search, PyPI package metadata, You.com Search (`YDC_API_KEY` optional), Wikipedia, Wikidata, Hacker News, arXiv, Crossref, OpenAlex, and Semantic Scholar are called directly when a mode selects them. SearXNG remains the broad-web provider for Google/Bing/Brave/DuckDuckGo-style engines, but Google, Startpage, Yahoo, and Reddit are best-effort explicit sources rather than defaults because they are commonly blocked or empty.
 
 ## Why not just use SearXNG directly?
 

@@ -79,7 +79,7 @@ curl "http://localhost:3939/engines"
 
 The bundled AgentSearch SearXNG config explicitly enables a focused engine set, and `use_default_settings: true` can expose additional engines from the installed SearXNG catalog. Avoid hard-coding a fixed engine count in clients.
 
-Strategy modes also include direct no-key providers for GitHub, MDN, Docker Hub, PyPI, Wikipedia, Wikidata, Hacker News, arXiv, Crossref, OpenAlex, and Semantic Scholar. Reddit is treated as best-effort because anonymous requests are often blocked. Use `providers_health` and `providers_stats` to inspect which providers are actually returning rows in the current process.
+Strategy modes also include direct no-key providers for GitHub, MDN, Docker Hub, PyPI, You.com Search (`YDC_API_KEY` optional), Wikipedia, Wikidata, Hacker News, arXiv, Crossref, OpenAlex, and Semantic Scholar. Reddit is treated as best-effort because anonymous requests are often blocked. Use `providers_health` and `providers_stats` to inspect which providers are actually returning rows in the current process.
 
 ## Connect from Claude Desktop
 
