@@ -26,6 +26,7 @@ from app.cache import Cache
 from app.content_cache import ContentCache
 from app.database import QueryDatabase
 from app.dedup import deduplicate_with_scoring
+from app.search_providers import provider_by_name, providers_catalog
 from adapters import medium as medium_adapter
 from adapters.safe_fetch import safe_requests_get
 
@@ -153,6 +154,7 @@ class EngineAwareFakeSearxngClient:
         self.crossref_params: list[dict] = []
         self.openalex_params: list[dict] = []
         self.semantic_scholar_params: list[dict] = []
+        self.youcom_params: list[dict] = []
 
     async def get(self, url: str, params: dict | None = None, timeout: float | None = None, **kwargs) -> FakeResponse:
         url = str(url)
@@ -303,6 +305,41 @@ class EngineAwareFakeSearxngClient:
                     }
                 ]
             })
+        if url.startswith("https://api.you.com/v1/agents/search"):
+            request_headers = dict(kwargs.get("headers") or {})
+            self.youcom_params.append({
+                "params": dict(params or {}),
+                "headers": request_headers,
+            })
+            return FakeResponse({
+                "results": {
+                    "web": [
+                        {
+                            "title": "You.com web result",
+                            "url": "https://example.com/youcom-web",
+                            "description": "You.com web snippet",
+                        },
+                        {
+                            "title": "You.com second web result",
+                            "url": "https://example.org/youcom-web-2",
+                            "description": "You.com web snippet two",
+                        },
+                    ],
+                    "news": [
+                        {
+                            "title": "You.com news result",
+                            "url": "https://news.example.com/youcom-news",
+                            "description": "You.com news snippet",
+                            "page_age": "2026-07-22T00:00:00",
+                        }
+                    ],
+                },
+                "metadata": {
+                    "query": (params or {}).get("query", ""),
+                    "search_uuid": "test-search-uuid",
+                    "latency": 0.12,
+                },
+            })
         if url.endswith("/config"):
             return FakeResponse({
                 "engines": [
@@ -329,7 +366,10 @@ class EngineAwareFakeSearxngClient:
             search_params = params or {}
             self.search_params.append(dict(search_params))
             engine = search_params.get("engines")
-            if engine == "bing" and "fallback" in search_params.get("q", ""):
+            query_text = search_params.get("q", "")
+            if engine == "bing" and "fallback" in query_text:
+                return FakeResponse({"results": []})
+            if engine == "duckduckgo,brave" and "youcom" in query_text:
                 return FakeResponse({"results": []})
 
             engine_names = [item.strip() for item in (engine or "bing").split(",") if item.strip()]
@@ -690,6 +730,7 @@ def test_provider_stats_and_health_record_direct_attempts(monkeypatch: pytest.Mo
         (row["source"], row["name"]): row
         for row in stats.json()["providers"]
     }
+    assert "youcom" in {item["name"] for item in stats.json()["known_direct_providers"]}
     for name in ["github", "mdn", "docker_hub", "pypi"]:
         row = providers[("provider", name)]
         assert row["attempts"] == 1
@@ -701,6 +742,42 @@ def test_provider_stats_and_health_record_direct_attempts(monkeypatch: pytest.Mo
     data = health.json()
     assert data["status"] == "healthy"
     assert data["attempted"] >= 4
+
+
+def test_youcom_provider_uses_optional_api_key_and_maps_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("YDC_API_KEY", "ydc-test-key")
+    fake = EngineAwareFakeSearxngClient()
+
+    async def run_provider():
+        provider = provider_by_name("youcom")
+        return await provider.search(fake, "agentic search", 2)
+
+    result = asyncio.run(run_provider())
+
+    assert fake.youcom_params[0]["params"]["query"] == "agentic search"
+    assert fake.youcom_params[0]["params"]["count"] == 6
+    assert fake.youcom_params[0]["headers"]["X-API-Key"] == "ydc-test-key"
+    assert result.provider == "youcom"
+    assert [item["url"] for item in result.results] == [
+        "https://example.com/youcom-web",
+        "https://example.org/youcom-web-2",
+        "https://news.example.com/youcom-news",
+    ]
+    assert "Published: 2026-07-22T00:00:00" in result.results[2]["content"]
+
+
+def test_search_strategy_general_uses_youcom_provider_when_searxng_needs_more_coverage(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
+    monkeypatch.setenv("YDC_API_KEY", "ydc-test-key")
+    fake = EngineAwareFakeSearxngClient()
+    monkeypatch.setattr(main, "http_client", fake)
+
+    response = client.get("/search", params={"q": "youcom fallback", "count": 1, "mode": "general"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert any(attempt["provider"] == "youcom" for attempt in data["meta"]["engine_attempts"])
+    assert fake.youcom_params[0]["headers"]["X-API-Key"] == "ydc-test-key"
+    assert data["results"][0]["url"] == "https://example.com/youcom-web"
 
 
 def test_search_records_searxng_error_attempt(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:

@@ -333,6 +333,7 @@ SEARCH_STRATEGY_MODES: dict[str, tuple[SearchStrategyPack, ...]] = {
     "general": (
         _searxng_pack("bing"),
         _searxng_pack("duckduckgo", "brave"),
+        _provider_pack("youcom", "youcom"),
         _provider_pack("wikipedia", "wikipedia"),
         _provider_pack("wikidata", "wikidata"),
         _provider_pack("hackernews", "hackernews"),
