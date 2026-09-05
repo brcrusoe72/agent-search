@@ -90,7 +90,7 @@ AgentSearch delegates engine support to the connected SearXNG instance. The auth
 curl "http://localhost:3939/engines"
 ```
 
-The bundled `searxng/settings.example.yml` explicitly enables 25 engines, including best-effort Google/Startpage/Yahoo entries plus Brave, Bing, DuckDuckGo, Google Scholar, Semantic Scholar, arXiv, Crossref, OpenAlex, PubMed, Bing News, Reuters, Wikinews, Wikipedia, Wikidata, Hugging Face, Reddit, Hacker News, Stack Overflow, GitHub, Docker Hub, and Lobsters.
+The bundled `searxng/settings.example.yml` explicitly enables 25 engines, including best-effort Google/Startpage/Yahoo entries plus Brave, Bing, DuckDuckGo, Google Scholar, Semantic Scholar, arXiv, Crossref, OpenAlex, PubMed, Bing News, Reuters, Wikinews, Wikipedia, Wikidata, Hugging Face, Reddit, Hacker News, Stack Overflow, GitHub, Docker Hub, and Lobsters. The default Compose pin is SearXNG 2026.9.5 (searxng/searxng@sha256:55e1fa15a63ff04e79e213e6aa2837549877b0c6d60757cdb633ae9111cb5fea). Re-pin only after comparing live engines on a throwaway container: the previous 2026.3.29 pin left Brave, DuckDuckGo, and Google unresponsive, so default /search collapsed onto Bing junk. Upstream Bing issue searxng/searxng#4964 remains open.
 
 Run `./scripts/prepare-searxng.sh` to create ignored local runtime files at `searxng/settings.yml` and `searxng/settings.tor.yml` with generated SearXNG instance secrets. Do not commit those generated files.
 
@@ -401,7 +401,7 @@ Environment variables (set in `docker-compose.yml` or `.env`):
 | Variable | Default | Description |
 |---|---|---|
 | `SEARXNG_URL` | `http://searxng:8080` | SearXNG instance URL |
-| `SEARXNG_IMAGE` | pinned SearXNG digest | SearXNG container image; override only when intentionally upgrading |
+| `SEARXNG_IMAGE` | pinned SearXNG digest (2026.9.5) | SearXNG container image; override only after a live engine comparison on the candidate |
 | `PYTHON_BASE_IMAGE` | pinned Python digest | API Docker base image; override only when intentionally upgrading |
 | `COREDNS_IMAGE` | pinned CoreDNS digest | Private-stack DNS image |
 | `SOCAT_IMAGE` | pinned socat digest | Private-stack TCP forwarder image |
