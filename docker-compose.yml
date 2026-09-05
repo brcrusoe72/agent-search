@@ -1,6 +1,6 @@
 services:
   searxng:
-    image: ${SEARXNG_IMAGE:-searxng/searxng@sha256:4d7ed8b7035ecf827bd901ba6d32f5c32d8119bc09bb3cdafeb0ce58f1b951c1}
+    image: ${SEARXNG_IMAGE:-searxng/searxng@sha256:55e1fa15a63ff04e79e213e6aa2837549877b0c6d60757cdb633ae9111cb5fea}
     container_name: agent-search-searxng
     volumes:
       - ./searxng:/etc/searxng:rw
