@@ -115,12 +115,32 @@ SearXNG finds pages. AgentSearch fetches and reads them, scores and deduplicates
 ## Lighter-weight siblings
 
 AgentSearch is the full self-hosted stack. If you only need one slice of it —
-keyless, no server, `pip`/`uv`-installable — these carve a single job out of it
+keyless, no server, installable from source — these carve a single job out of it
 and do just that one thing:
 
 - **[scholar](https://github.com/brcrusoe72/scholar-cli)** — scholarly search over OpenAlex: peer-reviewed sources and citation graphs, where credibility is data (venue, citations, retraction flags) rather than vibes. *(52% primary-source precision on a 20-question benchmark.)*
 - **[agent-read](https://github.com/brcrusoe72/agent-read)** — this repo's extraction chain as a standalone `URL → clean text` CLI: the same escalation (direct → readability → UA-rotation → Wayback → PDF), no Docker, no SearXNG. *(85% usable text on 40 hard URLs, vs. 48% for a naive fetch.)*
 - **[agent-web](https://github.com/brcrusoe72/agent-web)** — for pages that need *interaction* rather than a fetch: drive a real browser and act on a compact accessibility snapshot with element refs. *(Snapshot ≈ 16× smaller than raw HTML.)*
+
+With Python 3.10+ and Git installed, install directly from the source repositories
+using `uv` (these commands do not depend on a PyPI release):
+
+```bash
+uv tool install git+https://github.com/brcrusoe72/scholar-cli.git
+uv tool install git+https://github.com/brcrusoe72/agent-read.git
+uv tool install git+https://github.com/brcrusoe72/agent-web.git
+```
+
+Alternatively, inside an activated Python virtual environment:
+
+```bash
+python -m pip install git+https://github.com/brcrusoe72/scholar-cli.git
+python -m pip install git+https://github.com/brcrusoe72/agent-read.git
+python -m pip install git+https://github.com/brcrusoe72/agent-web.git
+```
+
+The commands are `scholar`, `agent-read`, and `agent-web`. See each repository's
+README for optional features and browser setup.
 
 ## Endpoints
 
