@@ -43,16 +43,14 @@ jobs:
 
       - name: Check MCP package in isolated env
         run: |
-          python -m venv /tmp/agentsearch-mcp-venv
-          /tmp/agentsearch-mcp-venv/bin/python -m pip install --upgrade pip
-          /tmp/agentsearch-mcp-venv/bin/python -m pip install -e mcp-server
-          /tmp/agentsearch-mcp-venv/bin/python -m agent_search_mcp --help
-          /tmp/agentsearch-mcp-venv/bin/python - <<'PY'
-          from agent_search_mcp.server import make_server
-
-          assert make_server("http://localhost:3939") is not None
-          print("mcp imports ok")
-          PY
+          for mcp_version in 1.27.2 2.2.0; do
+            mcp_venv="/tmp/agentsearch-mcp-${mcp_version}"
+            python -m venv "${mcp_venv}"
+            "${mcp_venv}/bin/python" -m pip install --upgrade pip
+            "${mcp_venv}/bin/python" -m pip install "mcp==${mcp_version}" -e mcp-server
+            "${mcp_venv}/bin/python" -m agent_search_mcp --help
+            "${mcp_venv}/bin/python" mcp-server/tests/protocol_smoke.py
+          done
 
       - name: Build Python packages
         run: |

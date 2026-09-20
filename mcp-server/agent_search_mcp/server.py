@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 import httpx
 from mcp.server import Server
@@ -37,7 +38,6 @@ def load_token() -> str | None:
 
 
 def make_server(base_url: str, token: str | None = None) -> Server:
-    server = Server("agent-search")
     timeout = httpx.Timeout(120, connect=10)
     headers = {"Authorization": f"Bearer {token}"} if token else None
 
@@ -48,8 +48,7 @@ def make_server(base_url: str, token: str | None = None) -> Server:
                 params[name] = value
         return params
 
-    @server.list_tools()
-    async def list_tools() -> list[Tool]:
+    async def _list_tools() -> list[Tool]:
         return [
             Tool(
                 name="health",
@@ -233,8 +232,11 @@ def make_server(base_url: str, token: str | None = None) -> Server:
             ),
         ]
 
-    @server.call_tool()
-    async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+    async def _call_tool(
+        name: str,
+        arguments: dict[str, Any] | None,
+    ) -> list[TextContent]:
+        arguments = arguments or {}
         try:
             async with httpx.AsyncClient(base_url=base_url, timeout=timeout, headers=headers) as client:
                 if name == "health":
@@ -334,7 +336,31 @@ def make_server(base_url: str, token: str | None = None) -> Server:
         except Exception as e:
             return [TextContent(type="text", text=f"Error: {type(e).__name__}: {e}")]
 
-    return server
+    if hasattr(Server, "list_tools"):
+        # MCP 1.x registers request handlers with decorators.
+        server = Server("agent-search")
+        server.list_tools()(_list_tools)
+        server.call_tool()(_call_tool)
+        return server
+
+    # MCP 2.x registers typed request handlers in the constructor.
+    from mcp.types import CallToolRequestParams, CallToolResult, ListToolsResult
+
+    async def _list_tools_v2(_context: Any, _params: Any) -> ListToolsResult:
+        return ListToolsResult(tools=await _list_tools())
+
+    async def _call_tool_v2(
+        _context: Any,
+        params: CallToolRequestParams,
+    ) -> CallToolResult:
+        content = await _call_tool(params.name, params.arguments)
+        return CallToolResult(content=content)
+
+    return Server(
+        "agent-search",
+        on_list_tools=_list_tools_v2,
+        on_call_tool=_call_tool_v2,
+    )
 
 
 async def main(base_url: str, token: str | None = None):
