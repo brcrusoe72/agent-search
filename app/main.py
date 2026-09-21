@@ -884,8 +884,10 @@ async def _search_strategy_impl(
         if pack.source == "provider":
             if not pack.provider:
                 raise HTTPException(status_code=500, detail=f"Strategy pack '{pack.label or pack.source}' has no provider")
-            assert http_client is not None
             provider = provider_by_name(pack.provider)
+            if not provider.is_available():
+                continue
+            assert http_client is not None
             upstream = await provider.search(http_client, query_text, count * 2)
             provider_name = upstream.provider
         elif pack.source == "searxng":

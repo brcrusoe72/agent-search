@@ -744,7 +744,7 @@ def test_provider_stats_and_health_record_direct_attempts(monkeypatch: pytest.Mo
     assert data["attempted"] >= 4
 
 
-def test_youcom_provider_uses_optional_api_key_and_maps_results(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_youcom_provider_requires_api_key_and_maps_results(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("YDC_API_KEY", "ydc-test-key")
     fake = EngineAwareFakeSearxngClient()
 
@@ -766,6 +766,18 @@ def test_youcom_provider_uses_optional_api_key_and_maps_results(monkeypatch: pyt
     assert "Published: 2026-07-22T00:00:00" in result.results[2]["content"]
 
 
+def test_youcom_provider_is_unavailable_without_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("YDC_API_KEY", raising=False)
+    provider = provider_by_name("youcom")
+    assert provider.is_available() is False
+
+    monkeypatch.setenv("YDC_API_KEY", "  ")
+    assert provider.is_available() is False
+
+    monkeypatch.setenv("YDC_API_KEY", "ydc-test-key")
+    assert provider.is_available() is True
+
+
 def test_search_strategy_general_uses_youcom_provider_when_searxng_needs_more_coverage(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
     monkeypatch.setenv("YDC_API_KEY", "ydc-test-key")
     fake = EngineAwareFakeSearxngClient()
@@ -778,6 +790,38 @@ def test_search_strategy_general_uses_youcom_provider_when_searxng_needs_more_co
     assert any(attempt["provider"] == "youcom" for attempt in data["meta"]["engine_attempts"])
     assert fake.youcom_params[0]["headers"]["X-API-Key"] == "ydc-test-key"
     assert data["results"][0]["url"] == "https://example.com/youcom-web"
+
+
+def test_search_strategy_general_skips_youcom_without_api_key(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
+    monkeypatch.delenv("YDC_API_KEY", raising=False)
+    fake = EngineAwareFakeSearxngClient()
+    monkeypatch.setattr(main, "http_client", fake)
+
+    response = client.get("/search", params={"q": "youcom fallback", "count": 1, "mode": "general"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert fake.youcom_params == []
+    assert not any(attempt["provider"] == "youcom" for attempt in data["meta"]["engine_attempts"])
+    for attempt in data["meta"]["engine_attempts"]:
+        assert "you.com" not in " ".join(attempt.get("upstream_errors") or [])
+        assert "you.com" not in " ".join(attempt.get("unresponsive_engines") or [])
+
+    stats = client.get("/providers/stats")
+    assert stats.status_code == 200
+    provider_rows = {
+        (row["source"], row["name"]): row
+        for row in stats.json()["providers"]
+    }
+    assert ("provider", "youcom") not in provider_rows
+    assert "youcom" in {item["name"] for item in stats.json()["known_direct_providers"]}
+
+    health = client.get("/providers/health")
+    assert health.status_code == 200
+    youcom_rows = [row for row in health.json()["providers"] if row["name"] == "youcom"]
+    assert youcom_rows and all(row["attempts"] == 0 for row in youcom_rows)
+    assert all(row["health"] == "unknown" for row in youcom_rows)
+    assert all("you.com" not in (row.get("last_error") or "") for row in health.json()["providers"])
 
 
 def test_search_records_searxng_error_attempt(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:

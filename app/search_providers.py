@@ -38,6 +38,15 @@ class SearchProvider:
     name: str = ""
     engine_name: str = ""
     timeout: float = 15.0
+    #: Environment variable that must be set for this provider to run.
+    #: Providers without a ``requires_env`` value are always available.
+    requires_env: str | None = None
+
+    def is_available(self) -> bool:
+        """Return True when the provider's required environment is configured."""
+        if not self.requires_env:
+            return True
+        return bool(os.getenv(self.requires_env, "").strip())
 
     async def search(self, client: httpx.AsyncClient, query: str, count: int) -> ProviderResponse:
         start = time.monotonic()
@@ -569,6 +578,7 @@ class SemanticScholarProvider(SearchProvider):
 class YouComProvider(SearchProvider):
     name = "youcom"
     engine_name = "you.com"
+    requires_env = "YDC_API_KEY"
 
     def _headers(self) -> dict[str, str]:
         headers = dict(DEFAULT_PROVIDER_HEADERS)
