@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import time
 import xml.etree.ElementTree as ET
@@ -37,6 +38,15 @@ class SearchProvider:
     name: str = ""
     engine_name: str = ""
     timeout: float = 15.0
+    #: Environment variable that must be set for this provider to run.
+    #: Providers without a ``requires_env`` value are always available.
+    requires_env: str | None = None
+
+    def is_available(self) -> bool:
+        """Return True when the provider's required environment is configured."""
+        if not self.requires_env:
+            return True
+        return bool(os.getenv(self.requires_env, "").strip())
 
     async def search(self, client: httpx.AsyncClient, query: str, count: int) -> ProviderResponse:
         start = time.monotonic()
@@ -565,6 +575,55 @@ class SemanticScholarProvider(SearchProvider):
         return results
 
 
+class YouComProvider(SearchProvider):
+    name = "youcom"
+    engine_name = "you.com"
+    requires_env = "YDC_API_KEY"
+
+    def _headers(self) -> dict[str, str]:
+        headers = dict(DEFAULT_PROVIDER_HEADERS)
+        api_key = os.getenv("YDC_API_KEY", "").strip()
+        if api_key:
+            headers["X-API-Key"] = api_key
+        return headers
+
+    async def _search(self, client: httpx.AsyncClient, query: str, count: int) -> list[dict]:
+        resp = await client.get(
+            "https://api.you.com/v1/agents/search",
+            params={
+                "query": query,
+                "count": min(max(count * 3, 1), 50),
+            },
+            headers=self._headers(),
+            timeout=self.timeout,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        results: list[dict] = []
+
+        for section_name in ("web", "news"):
+            section_items = _json_items(data, "results", section_name)
+            if not isinstance(section_items, list):
+                continue
+            for item in section_items[: count * 3]:
+                if not isinstance(item, dict):
+                    continue
+                url = _safe_text(item.get("url"))
+                if not url:
+                    continue
+                title = item.get("title") or url
+                snippet = item.get("description") or item.get("snippet") or item.get("content") or ""
+                if section_name == "news":
+                    page_age = _safe_text(item.get("page_age"))
+                    if page_age:
+                        snippet = f"{snippet} Published: {page_age}".strip()
+                results.append(self._result(title, url, snippet))
+                if len(results) >= count * 3:
+                    return results
+
+        return results
+
+
 PROVIDERS: dict[str, SearchProvider] = {
     "mdn": MDNProvider(),
     "github": GitHubProvider(),
@@ -578,4 +637,5 @@ PROVIDERS: dict[str, SearchProvider] = {
     "crossref": CrossrefProvider(),
     "openalex": OpenAlexProvider(),
     "semantic_scholar": SemanticScholarProvider(),
+    "youcom": YouComProvider(),
 }

@@ -333,6 +333,7 @@ SEARCH_STRATEGY_MODES: dict[str, tuple[SearchStrategyPack, ...]] = {
     "general": (
         _searxng_pack("bing"),
         _searxng_pack("duckduckgo", "brave"),
+        _provider_pack("youcom", "youcom"),
         _provider_pack("wikipedia", "wikipedia"),
         _provider_pack("wikidata", "wikidata"),
         _provider_pack("hackernews", "hackernews"),
@@ -883,8 +884,10 @@ async def _search_strategy_impl(
         if pack.source == "provider":
             if not pack.provider:
                 raise HTTPException(status_code=500, detail=f"Strategy pack '{pack.label or pack.source}' has no provider")
-            assert http_client is not None
             provider = provider_by_name(pack.provider)
+            if not provider.is_available():
+                continue
+            assert http_client is not None
             upstream = await provider.search(http_client, query_text, count * 2)
             provider_name = upstream.provider
         elif pack.source == "searxng":
