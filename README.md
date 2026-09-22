@@ -40,14 +40,22 @@ Run the self-contained test suite:
 ```bash
 python -m venv .venv
 . .venv/bin/activate
-pip install -r requirements.txt pytest requests
-pip install -e sdk -e mcp-server
+pip install -r requirements.txt pytest requests build wheel "setuptools>=68"
+pip install -e sdk
 ./scripts/prepare-searxng.sh
 pytest tests -q
 python -m compileall app adapters mcp-server/agent_search_mcp scripts sdk -q
+python -m pip check
 docker compose -f docker-compose.yml config --quiet
 docker compose -f docker-compose.yml -f examples/compose.private.yml config --quiet
 docker build -t agent-search-api:test .
+
+# Verify the MCP package in an isolated environment so its server dependency
+# range cannot replace the API's pinned FastAPI/Starlette stack.
+python -m venv .venv-mcp
+.venv-mcp/bin/python -m pip install -e mcp-server
+.venv-mcp/bin/python -m agent_search_mcp --help
+.venv-mcp/bin/python -m pip check
 ```
 
 Those tests mock SearXNG, so they do not require Docker or a running local service.
