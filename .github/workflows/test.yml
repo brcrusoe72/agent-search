@@ -41,6 +41,9 @@ jobs:
           print("imports ok")
           PY
 
+      - name: Check API dependency consistency
+        run: python -m pip check
+
       - name: Check MCP package in isolated env
         run: |
           python -m venv /tmp/agentsearch-mcp-venv
@@ -53,6 +56,7 @@ jobs:
           assert make_server("http://localhost:3939") is not None
           print("mcp imports ok")
           PY
+          /tmp/agentsearch-mcp-venv/bin/python -m pip check
 
       - name: Build Python packages
         run: |
