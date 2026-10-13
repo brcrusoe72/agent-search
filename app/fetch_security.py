@@ -186,6 +186,8 @@ class SafeSyncNetworkBackend(httpcore.NetworkBackend):
                     local_address=local_address, socket_options=socket_options)
             except (OSError, httpcore.ConnectError, httpcore.ConnectTimeout) as exc:
                 last_error = exc
+        if last_error is None:
+            raise UnsafeURLError("No validated connection destination")
         raise last_error
 
     def connect_unix_socket(self, path, timeout=None, socket_options=None):

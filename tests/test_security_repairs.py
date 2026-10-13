@@ -12,7 +12,6 @@ import pytest
 import app.evolver as evolver_module
 from app.content_cache import ContentCache
 from app.dedup import deduplicate_with_scoring
-from app.evolver import Evolver
 from app.source_library import get_domain_score
 
 
@@ -30,7 +29,7 @@ def test_untrusted_evolver_reports_never_apply_blocklist(tmp_path, monkeypatch) 
     ContentCache(str(database_path))
     blocklist_path = tmp_path / "blocked_domains.txt"
     monkeypatch.setattr(evolver_module, "DYNAMIC_BLOCKLIST_PATH", blocklist_path)
-    evolver = Evolver(str(database_path))
+    evolver = evolver_module.Evolver(str(database_path))
 
     for report in source["reports"]:
         evolver.report_failure(

@@ -153,6 +153,7 @@ async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> N
             writer.write(data)
             await writer.drain()
     except (ConnectionError, asyncio.CancelledError):
+        # The peer closed or the tunnel was cancelled; close the writer below.
         pass
     finally:
         if not writer.is_closing():
