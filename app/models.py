@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from pydantic import BaseModel, Field
 
 
@@ -34,6 +36,10 @@ class SearchMeta(BaseModel):
     upstream_status: str = Field("ok", description="ok | degraded | error")
     upstream_errors: list[str] = Field(default_factory=list, description="SearXNG/backend errors")
     unresponsive_engines: list[str] = Field(default_factory=list, description="Engines SearXNG reported as unresponsive")
+    network_route: str = Field(
+        default_factory=lambda: os.getenv("NETWORK_ROUTE", "direct"),
+        description="Deployment egress route: direct or tor",
+    )
 
 
 class SearchResponse(BaseModel):
@@ -66,6 +72,8 @@ class TrustInfo(BaseModel):
 class ReadResponse(BaseModel):
     """Response from /read — extracted content via kill chain."""
     url: str
+    fetched_url: str = Field("", description="URL that actually supplied the returned content")
+    derived_from: str | None = Field(None, description="Requested URL when content came from another source")
     content: str | None = Field(None, description="Extracted content text")
     strategy: str | None = Field(None, description="Strategy that succeeded")
     chars: int = Field(0, description="Content length in characters")
@@ -74,6 +82,7 @@ class ReadResponse(BaseModel):
     error: str | None = Field(None, description="Error message if extraction failed")
     success: bool = Field(description="Whether content was extracted")
     trust: TrustInfo | None = Field(None, description="Domain trust assessment")
+    requested_trust: TrustInfo | None = Field(None, description="Trust assessment for the requested URL")
 
 
 class BatchReadRequest(BaseModel):
@@ -101,6 +110,8 @@ class BrowserFetchResponse(BaseModel):
     """Response from /providers/browser/fetch."""
 
     url: str
+    fetched_url: str = ""
+    derived_from: str | None = None
     final_url: str = ""
     title: str = ""
     content: str | None = Field(None, description="Extracted rendered text")
@@ -113,6 +124,7 @@ class BrowserFetchResponse(BaseModel):
     blocked_reason: str | None = None
     render_time_ms: float = 0.0
     trust: TrustInfo | None = Field(None, description="Domain trust assessment")
+    requested_trust: TrustInfo | None = Field(None, description="Trust assessment for the requested URL")
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +174,10 @@ class EvolveResponse(BaseModel):
     stats_summary: dict
     recommendations: list[dict]
     existing_adapters: list[str]
-    actions_taken: list[str] = Field(default_factory=list, description="Auto-applied actions")
+    actions_taken: list[str] = Field(
+        default_factory=list,
+        description="Reserved compatibility field; adaptation analysis is read-only",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -208,3 +223,4 @@ class HealthResponse(BaseModel):
     upstream_errors: list[str] = Field(default_factory=list)
     unresponsive_engines: list[str] = Field(default_factory=list)
     version: str = "1.0.0"
+    network_route: str = Field(default_factory=lambda: os.getenv("NETWORK_ROUTE", "direct"))

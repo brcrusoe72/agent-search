@@ -36,6 +36,7 @@ import re
 import socket
 import subprocess
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urljoin, urlparse
@@ -44,6 +45,12 @@ import httpx
 from bs4 import BeautifulSoup
 
 from app.content_cache import ContentCache
+from app.fetch_security import (
+    DEFAULT_MAX_RESPONSE_BYTES,
+    UnsafeURLError,
+    safe_httpx_get,
+    validate_public_url,
+)
 from app.scrubber import scrub_content
 from app.domain_trust import evaluate_trust, format_trust_tag, TrustResult
 
@@ -97,7 +104,7 @@ BLOCKED_FETCH_DOMAINS = {
     "barrywehmiller.wd1.myworkdayjobs.com",  # 0% success rate — Workday JS app (auto-blocked 2026-04-02)
 }
 
-# Dynamic blocklist — loaded from file, written by evolver auto-apply
+# Optional operator-managed dynamic blocklist. Adaptation endpoints never write it.
 DYNAMIC_BLOCKLIST_PATH = Path(os.getenv("DATA_DIR", "data")) / "blocked_domains.txt"
 
 
@@ -161,91 +168,22 @@ def _host_matches(hostname: str, domain: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def is_safe_url(url: str, verbose: bool = False) -> bool:
-    """
-    Validate a URL is safe to fetch. Blocks:
-    - Non-HTTP(S) schemes
-    - Localhost / loopback addresses
-    - Private/reserved IP ranges (RFC 1918, link-local, etc.)
-    - Blocked domains and suspicious TLDs
-    - DNS rebinding (resolves hostname and checks resolved IP)
-    """
+    """Validate a URL using the shared fail-closed outbound policy."""
     try:
-        parsed = urlparse(url)
-    except Exception:
-        return False
-
-    if parsed.scheme not in ("http", "https"):
+        validate_public_url(
+            url,
+            resolver=socket.getaddrinfo,
+            blocked_domains=get_blocked_domains(),
+            blocked_tlds=SUSPICIOUS_TLDS,
+        )
+        return True
+    except (TypeError, ValueError) as exc:
         if verbose:
-            logger.warning("BLOCKED: non-HTTP scheme '%s'", _safe_log_value(parsed.scheme))
+            logger.warning("BLOCKED URL %s: %s", _safe_log_value(url), exc)
         return False
 
-    hostname = parsed.hostname
-    if not hostname:
-        if verbose:
-            logger.warning("BLOCKED: no hostname in URL")
-        return False
 
-    # Warn on plain HTTP (content could be tampered via MITM)
-    if parsed.scheme == "http" and verbose:
-        logger.warning("DEGRADED: plain HTTP URL (no TLS) - %s", _safe_log_value(hostname))
-
-    hostname_lower = hostname.lower()
-
-    if hostname_lower in ("localhost", "localhost.localdomain", "127.0.0.1", "::1", "0.0.0.0"):
-        if verbose:
-            logger.warning("BLOCKED: localhost/loopback")
-        return False
-
-    all_blocked = get_blocked_domains()
-    for blocked in all_blocked:
-        if hostname_lower == blocked or hostname_lower.endswith("." + blocked):
-            if verbose:
-                logger.warning("BLOCKED: blocked domain '%s'", _safe_log_value(blocked))
-            return False
-
-    for tld in SUSPICIOUS_TLDS:
-        if hostname_lower.endswith(tld):
-            if verbose:
-                logger.warning("BLOCKED: suspicious TLD '%s'", _safe_log_value(tld))
-            return False
-
-    # IP address check — block private/reserved ranges
-    try:
-        addr = ipaddress.ip_address(hostname)
-        if addr.is_private or addr.is_reserved or addr.is_loopback or addr.is_link_local:
-            if verbose:
-                logger.warning("BLOCKED: private/reserved IP %s", addr)
-            return False
-    except ValueError:
-        # Not an IP literal — resolve DNS and check resolved IP
-        try:
-            resolved = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
-            for family, _, _, _, sockaddr in resolved:
-                ip_str = sockaddr[0]
-                try:
-                    addr = ipaddress.ip_address(ip_str)
-                    if addr.is_private or addr.is_reserved or addr.is_loopback or addr.is_link_local:
-                        if verbose:
-                            logger.warning(
-                                "BLOCKED: '%s' resolves to private IP %s",
-                                _safe_log_value(hostname),
-                                addr,
-                            )
-                        return False
-                except ValueError:
-                    continue
-        except (socket.gaierror, OSError) as exc:
-            if verbose:
-                logger.debug(
-                    "DNS resolution failed for '%s': %s",
-                    _safe_log_value(hostname),
-                    exc,
-                )
-
-    return True
-
-
-class UnsafeRedirectError(ValueError):
+class UnsafeRedirectError(UnsafeURLError):
     """Raised when a redirect target fails the URL safety policy."""
 
 
@@ -257,27 +195,17 @@ async def _safe_get(
     **kwargs,
 ) -> httpx.Response:
     """GET a URL while validating every redirect hop before following it."""
-    current_url = url
-    request_kwargs = dict(kwargs)
-    request_kwargs.pop("follow_redirects", None)
-    for _ in range(max_redirects + 1):
-        if not is_safe_url(current_url, verbose=True):
-            raise UnsafeRedirectError(f"Unsafe URL blocked: {current_url}")
-
-        response = await client.get(current_url, follow_redirects=False, **request_kwargs)
-        if not response.is_redirect:
-            return response
-
-        location = response.headers.get("location")
-        if not location:
-            return response
-
-        next_url = urljoin(str(response.url or current_url), location)
-        if not is_safe_url(next_url, verbose=True):
-            raise UnsafeRedirectError(f"Unsafe redirect blocked: {current_url} -> {next_url}")
-        current_url = next_url
-
-    raise UnsafeRedirectError(f"Too many redirects for URL: {url}")
+    try:
+        return await safe_httpx_get(
+            client,
+            url,
+            validator=lambda target: is_safe_url(target, verbose=True),
+            max_redirects=max_redirects,
+            max_bytes=DEFAULT_MAX_RESPONSE_BYTES,
+            **kwargs,
+        )
+    except UnsafeURLError as exc:
+        raise UnsafeRedirectError(str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -380,14 +308,30 @@ def _load_medium_adapter():
         return None
 
 
-async def _strategy_medium(url: str) -> Optional[str]:
+@dataclass(frozen=True)
+class FetchedContent:
+    """Extracted text plus the URL that actually supplied those bytes (R8)."""
+
+    content: str
+    fetched_url: str
+
+
+async def _strategy_medium(url: str) -> Optional[FetchedContent]:
     """Run the Medium adapter in a thread pool."""
     adapter = _load_medium_adapter()
     if not adapter:
         return None
     loop = asyncio.get_event_loop()
     try:
-        return await loop.run_in_executor(None, adapter, url)
+        result = await loop.run_in_executor(None, adapter, url)
+        if isinstance(result, dict) and result.get("content"):
+            return FetchedContent(
+                content=str(result["content"]),
+                fetched_url=str(result.get("fetched_url") or url),
+            )
+        if isinstance(result, str):
+            return FetchedContent(result, url)
+        return None
     except Exception as e:
         logger.debug("Medium adapter failed: %s", e)
         return None
@@ -412,7 +356,7 @@ def _load_cloudflare_adapter():
         return None
 
 
-async def _strategy_cloudflare(cf_mod, url: str) -> Optional[str]:
+async def _strategy_cloudflare(cf_mod, url: str) -> Optional[FetchedContent]:
     """Run the Cloudflare bypass adapter's async extract."""
     try:
         result = await cf_mod.extract(url, timeout=30)
@@ -434,7 +378,10 @@ async def _strategy_cloudflare(cf_mod, url: str) -> Optional[str]:
                     content = soup.get_text(separator="\n", strip=True)
                 except Exception as exc:
                     logger.debug("Cloudflare HTML cleanup failed: %s", exc)
-            return content
+            return FetchedContent(
+                content=content,
+                fetched_url=str(result.get("fetched_url") or url),
+            )
     except Exception as e:
         logger.debug("Cloudflare bypass failed: %s", e)
     return None
@@ -459,7 +406,7 @@ def _load_adapter(name: str):
 # Strategies (each returns str | None)
 # ---------------------------------------------------------------------------
 
-async def strategy_direct(client: httpx.AsyncClient, url: str, ua_index: int = 0) -> Optional[str]:
+async def strategy_direct(client: httpx.AsyncClient, url: str, ua_index: int = 0) -> Optional[FetchedContent]:
     """Strategy 1: Direct GET + BeautifulSoup."""
     try:
         r = await _safe_get(
@@ -479,14 +426,14 @@ async def strategy_direct(client: httpx.AsyncClient, url: str, ua_index: int = 0
         r.raise_for_status()
         text = clean_html(r.text)
         if text and not is_paywalled(text):
-            return text
+            return FetchedContent(text, str(r.url or url))
         return None
     except Exception as exc:
         logger.debug("Direct strategy failed for %s: %s", _safe_log_value(_hostname(url)), exc)
         return None
 
 
-async def strategy_readability(client: httpx.AsyncClient, url: str) -> Optional[str]:
+async def strategy_readability(client: httpx.AsyncClient, url: str) -> Optional[FetchedContent]:
     """Strategy 2: Readability-style extraction — score blocks by paragraph density."""
     try:
         r = await _safe_get(
@@ -519,14 +466,14 @@ async def strategy_readability(client: httpx.AsyncClient, url: str) -> Optional[
             candidates.sort(reverse=True)
             text = candidates[0][1]
             if not is_paywalled(text):
-                return text[:MAX_CONTENT_CHARS]
+                return FetchedContent(text[:MAX_CONTENT_CHARS], str(r.url or url))
         return None
     except Exception as exc:
         logger.debug("Readability strategy failed for %s: %s", _safe_log_value(_hostname(url)), exc)
         return None
 
 
-async def strategy_ua_rotation(client: httpx.AsyncClient, url: str) -> Optional[str]:
+async def strategy_ua_rotation(client: httpx.AsyncClient, url: str) -> Optional[FetchedContent]:
     """Strategy 3: Try all user agents."""
     for i in range(1, len(USER_AGENTS)):  # Skip 0, already tried
         result = await strategy_direct(client, url, ua_index=i)
@@ -535,7 +482,7 @@ async def strategy_ua_rotation(client: httpx.AsyncClient, url: str) -> Optional[
     return None
 
 
-async def strategy_wayback(client: httpx.AsyncClient, url: str) -> Optional[str]:
+async def strategy_wayback(client: httpx.AsyncClient, url: str) -> Optional[FetchedContent]:
     """Strategy 4: Wayback Machine via CDX API."""
     try:
         r = await client.get(
@@ -557,14 +504,14 @@ async def strategy_wayback(client: httpx.AsyncClient, url: str) -> Optional[str]
                 if r2.is_success:
                     text = clean_html(r2.text)
                     if text:
-                        return text
+                        return FetchedContent(text, str(r2.url or snapshot_url))
         return None
     except Exception as exc:
         logger.debug("Wayback strategy failed for %s: %s", _safe_log_value(_hostname(url)), exc)
         return None
 
 
-async def strategy_google_cache(client: httpx.AsyncClient, url: str) -> Optional[str]:
+async def strategy_google_cache(client: httpx.AsyncClient, url: str) -> Optional[FetchedContent]:
     """Strategy 5: Google Cache.
 
     Google cache pages wrap original content in a div. We need to strip
@@ -598,12 +545,12 @@ async def strategy_google_cache(client: httpx.AsyncClient, url: str) -> Optional
                 if el:
                     text = el.get_text(separator="\n", strip=True)
                     if len(text) >= MIN_USEFUL_CHARS:
-                        return text[:MAX_CONTENT_CHARS]
+                        return FetchedContent(text[:MAX_CONTENT_CHARS], str(r.url or cache_url))
 
             # Fallback: full body text
             text = soup.get_text(separator="\n", strip=True)
             if text and len(text) >= MIN_USEFUL_CHARS:
-                return text[:MAX_CONTENT_CHARS]
+                return FetchedContent(text[:MAX_CONTENT_CHARS], str(r.url or cache_url))
         return None
     except Exception as exc:
         logger.debug("Google cache strategy failed for %s: %s", _safe_log_value(_hostname(url)), exc)
@@ -612,7 +559,7 @@ async def strategy_google_cache(client: httpx.AsyncClient, url: str) -> Optional
 
 async def strategy_search_about(
     client: httpx.AsyncClient, url: str, searxng_url: str
-) -> Optional[str]:
+) -> Optional[FetchedContent]:
     """Strategy 6: Can't read the page? Search for coverage elsewhere."""
     try:
         domain = _hostname(url)
@@ -634,27 +581,37 @@ async def strategy_search_about(
             if result_domain != domain and is_safe_url(result_url):
                 content = await strategy_direct(client, result_url)
                 if content:
-                    return f"[Via coverage of {url}]\n\n{content}"
+                    return FetchedContent(
+                        content=f"[Via coverage of {url}]\n\n{content.content}",
+                        fetched_url=content.fetched_url,
+                    )
         return None
     except Exception as exc:
         logger.debug("Search-about strategy failed for %s: %s", _safe_log_value(_hostname(url)), exc)
         return None
 
 
-def strategy_adapter_sync(url: str, obstacle_type: str) -> Optional[str]:
+def strategy_adapter_sync(url: str, obstacle_type: str) -> Optional[FetchedContent]:
     """Strategy 7: Custom adapter from disk (sync — run in executor)."""
     adapter = _load_adapter(obstacle_type)
     if adapter:
         try:
             result = adapter(url)
-            if result and len(result) >= MIN_USEFUL_CHARS:
-                return result[:MAX_CONTENT_CHARS]
+            if result:
+                if isinstance(result, dict):
+                    content = str(result.get("content") or "")
+                    fetched_url = str(result.get("fetched_url") or url)
+                else:
+                    content = str(result)
+                    fetched_url = url
+                if len(content) >= MIN_USEFUL_CHARS:
+                    return FetchedContent(content[:MAX_CONTENT_CHARS], fetched_url)
         except Exception as exc:
             logger.debug("Adapter '%s' failed for %s: %s", obstacle_type, _safe_log_value(_hostname(url)), exc)
     return None
 
 
-async def strategy_adapter(url: str, obstacle_type: str) -> Optional[str]:
+async def strategy_adapter(url: str, obstacle_type: str) -> Optional[FetchedContent]:
     """Strategy 7 wrapper: run sync adapter in thread pool."""
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, strategy_adapter_sync, url, obstacle_type)
@@ -810,7 +767,7 @@ async def strategy_youtube(url: str) -> Optional[str]:
     return await loop.run_in_executor(None, strategy_youtube_sync, url)
 
 
-async def strategy_browser_render(url: str, max_chars: int | None = None) -> Optional[str]:
+async def strategy_browser_render(url: str, max_chars: int | None = None) -> Optional[FetchedContent]:
     """Browser-rendered extraction for JS-rendered pages.
 
     This renderer does not solve challenges or bypass blocked search engines.
@@ -822,7 +779,7 @@ async def strategy_browser_render(url: str, max_chars: int | None = None) -> Opt
 
         result = await render_browser_page(url, max_chars=max_chars or MAX_CONTENT_CHARS)
         if result.success and result.content:
-            return result.content
+            return FetchedContent(result.content, result.final_url or result.url)
         if result.challenge_detected:
             logger.info("Browser render detected challenge for %s", _safe_log_value(_hostname(url)))
         elif result.error:
@@ -850,8 +807,13 @@ class KillChainResult:
         strategies_tried: list[str],
         error: Optional[str] = None,
         trust: Optional[TrustResult] = None,
+        fetched_url: Optional[str] = None,
+        derived_from: Optional[str] = None,
+        requested_trust: Optional[TrustResult] = None,
     ):
         self.url = url
+        self.fetched_url = fetched_url or url
+        self.derived_from = derived_from
         self.content = content
         self.strategy = strategy
         self.chars = chars
@@ -859,6 +821,7 @@ class KillChainResult:
         self.strategies_tried = strategies_tried
         self.error = error
         self.trust = trust
+        self.requested_trust = requested_trust or trust
 
     @property
     def success(self) -> bool:
@@ -887,57 +850,90 @@ async def kill_chain(
             cached=False, strategies_tried=[], error="URL blocked by safety check",
         )
 
-    # Domain trust evaluation (skip WHOIS for speed — batch callers can re-check)
-    trust = evaluate_trust(url, check_whois=False)
+    # Trust in the requested target remains distinct from trust in fetched bytes.
+    requested_trust = evaluate_trust(url, check_whois=False)
 
     # Block suspicious domains outright — but never block trusted TLDs (.gov/.edu/.mil)
     # The typosquat detector can false-positive on legitimate government domains (e.g. congress.gov → cnn)
     _SAFE_TLDS = (".gov", ".edu", ".mil", ".int")
-    _is_trusted_tld = any(trust.domain.endswith(t) for t in _SAFE_TLDS)
-    if trust.lookalike_of and not _is_trusted_tld:
+    _is_trusted_tld = any(requested_trust.domain.endswith(t) for t in _SAFE_TLDS)
+    if requested_trust.lookalike_of and not _is_trusted_tld:
         logger.warning(
             "Blocked typosquat: %s (lookalike of %s)",
-            _safe_log_value(trust.domain),
-            _safe_log_value(trust.lookalike_of),
+            _safe_log_value(requested_trust.domain),
+            _safe_log_value(requested_trust.lookalike_of),
         )
         return KillChainResult(
             url=url, content=None, strategy=None, chars=0,
             cached=False, strategies_tried=[],
-            error=f"Blocked: possible typosquat of '{trust.lookalike_of}'",
-            trust=trust,
+            error=f"Blocked: possible typosquat of '{requested_trust.lookalike_of}'",
+            trust=requested_trust,
+            requested_trust=requested_trust,
         )
 
-    # Tag content with provenance
-    def _tag_content(content: str) -> str:
+    def _tag_content(content: str, actual_trust: TrustResult) -> str:
         """Prepend trust tag to content so consuming agents see provenance."""
-        if trust.tier in ("suspicious", "new"):
-            return format_trust_tag(trust) + "\n\n" + content
+        if actual_trust.tier in ("suspicious", "new"):
+            return format_trust_tag(actual_trust) + "\n\n" + content
         return content
+
+    async def _successful(
+        fetched: FetchedContent,
+        strategy: str,
+        *,
+        cached: bool = False,
+    ) -> KillChainResult | None:
+        actual_url = fetched.fetched_url or url
+        actual_trust = evaluate_trust(actual_url, check_whois=False)
+        derived_from = url if actual_url != url else None
+        if cached:
+            text = fetched.content[:effective_max]
+        else:
+            text = sanitize_content(fetched.content)[:effective_max]
+            if len(text.strip()) < MIN_USEFUL_CHARS:
+                return None
+            text = _tag_content(text, actual_trust)
+            if content_cache:
+                await content_cache.set(
+                    url,
+                    text,
+                    strategy,
+                    fetched_url=actual_url,
+                    derived_from=derived_from,
+                )
+        return KillChainResult(
+            url=url,
+            fetched_url=actual_url,
+            derived_from=derived_from,
+            content=text,
+            strategy="cache" if cached else strategy,
+            chars=len(text),
+            cached=cached,
+            strategies_tried=["cache"] if cached else strategies_tried,
+            trust=actual_trust,
+            requested_trust=requested_trust,
+        )
 
     # Check cache
     if content_cache and not skip_cache:
-        cached_content = await content_cache.get(url)
-        if cached_content is not None:
-            return KillChainResult(
-                url=url, content=cached_content[:effective_max],
-                strategy="cache", chars=len(cached_content),
-                cached=True, strategies_tried=["cache"],
-                trust=trust,
+        cached_entry = await content_cache.get(url)
+        if cached_entry is not None:
+            cached_result = await _successful(
+                FetchedContent(cached_entry.content, cached_entry.fetched_url),
+                cached_entry.strategy or "cache",
+                cached=True,
             )
+            assert cached_result is not None
+            return cached_result
 
     # Medium gets its own path — dedicated adapter with paywall bypass
     if _is_medium(url):
         strategies_tried.append("medium-adapter")
-        content = await _strategy_medium(url)
-        if content:
-            content = sanitize_content(content)[:effective_max]
-            if content_cache:
-                await content_cache.set(url, content, "medium-adapter")
-            return KillChainResult(
-                url=url, content=content, strategy="medium-adapter",
-                chars=len(content), cached=False, strategies_tried=strategies_tried,
-                trust=trust,
-            )
+        fetched = await _strategy_medium(url)
+        if fetched:
+            result = await _successful(fetched, "medium-adapter")
+            if result:
+                return result
         # Fall through to normal chain if medium adapter fails
 
     # YouTube gets its own path
@@ -945,19 +941,15 @@ async def kill_chain(
         strategies_tried.append("youtube")
         content = await strategy_youtube(url)
         if content:
-            content = sanitize_content(content)[:effective_max]
-            if content_cache:
-                await content_cache.set(url, content, "youtube")
-            return KillChainResult(
-                url=url, content=content, strategy="youtube",
-                chars=len(content), cached=False, strategies_tried=strategies_tried,
-                trust=trust,
-            )
+            result = await _successful(FetchedContent(content, url), "youtube")
+            if result:
+                return result
         return KillChainResult(
             url=url, content=None, strategy=None, chars=0,
             cached=False, strategies_tried=strategies_tried,
             error="YouTube transcript extraction failed",
-            trust=trust,
+            trust=requested_trust,
+            requested_trust=requested_trust,
         )
 
     # PDF gets its own path
@@ -965,19 +957,15 @@ async def kill_chain(
         strategies_tried.append("pdf")
         content = await strategy_pdf(url)
         if content:
-            content = sanitize_content(content)[:effective_max]
-            if content_cache:
-                await content_cache.set(url, content, "pdf")
-            return KillChainResult(
-                url=url, content=content, strategy="pdf",
-                chars=len(content), cached=False, strategies_tried=strategies_tried,
-                trust=trust,
-            )
+            result = await _successful(FetchedContent(content, url), "pdf")
+            if result:
+                return result
         return KillChainResult(
             url=url, content=None, strategy=None, chars=0,
             cached=False, strategies_tried=strategies_tried,
             error="PDF extraction failed",
-            trust=trust,
+            trust=requested_trust,
+            requested_trust=requested_trust,
         )
 
     # Check if URL is a known Cloudflare-protected domain — try CF adapter early
@@ -1013,14 +1001,14 @@ async def kill_chain(
     for name, strategy_fn in web_strategies:
         strategies_tried.append(name)
         try:
-            content = await strategy_fn()
-            if content:
+            fetched = await strategy_fn()
+            if fetched:
                 # Cloudflare detected mid-chain: if direct/readability/ua-rotate got a challenge
                 # page, try the CF adapter before giving up on this strategy
                 if not _cf_adapter and name in ("direct", "readability", "ua-rotate"):
                     try:
                         _cf_mod = _load_cloudflare_adapter()
-                        if _cf_mod and _cf_mod.can_handle(url, content=content):
+                        if _cf_mod and _cf_mod.can_handle(url, content=fetched.content):
                             _cf_adapter = _cf_mod
                             # Insert CF strategy right after current position
                             logger.info(
@@ -1029,7 +1017,7 @@ async def kill_chain(
                             )
                             cf_content = await _strategy_cloudflare(_cf_adapter, url)
                             if cf_content:
-                                content = cf_content
+                                fetched = cf_content
                                 name = "cloudflare-bypass"
                             else:
                                 continue  # Skip this challenge page
@@ -1037,40 +1025,27 @@ async def kill_chain(
                         logger.debug("Cloudflare challenge handling failed: %s", exc)
 
                 # Check for accidental PDF content
-                if content.strip().startswith("%PDF"):
+                if fetched.content.strip().startswith("%PDF"):
                     pdf_content = await strategy_pdf(url)
                     if pdf_content:
-                        content = pdf_content
+                        fetched = FetchedContent(pdf_content, url)
 
-                content = sanitize_content(content)[:effective_max]
-
-                # Skip garbage — too short to be real content
-                if len(content.strip()) < MIN_USEFUL_CHARS:
+                result = await _successful(fetched, name)
+                if result is None:
                     logger.debug(
                         "[%s] Only %s chars - below minimum, skipping",
                         _safe_log_value(name),
-                        len(content.strip()),
+                        len(fetched.content.strip()),
                     )
                     continue
-
-                content = _tag_content(content)
                 logger.info(
                     "[%s] %s chars from %s [trust=%s]",
                     _safe_log_value(name),
-                    f"{len(content):,}",
-                    _safe_log_value(_hostname(url)),
-                    _safe_log_value(trust.tier),
+                    f"{result.chars:,}",
+                    _safe_log_value(_hostname(result.fetched_url)),
+                    _safe_log_value(result.trust.tier if result.trust else "unknown"),
                 )
-
-                if content_cache:
-                    await content_cache.set(url, content, name)
-
-                return KillChainResult(
-                    url=url, content=content, strategy=name,
-                    chars=len(content), cached=False,
-                    strategies_tried=strategies_tried,
-                    trust=trust,
-                )
+                return result
         except Exception as e:
             logger.debug(
                 "Strategy %s failed for %s: %s",
@@ -1086,7 +1061,8 @@ async def kill_chain(
         url=url, content=None, strategy=None, chars=0,
         cached=False, strategies_tried=strategies_tried,
         error="All extraction strategies failed",
-        trust=trust,
+        trust=requested_trust,
+        requested_trust=requested_trust,
     )
 
 

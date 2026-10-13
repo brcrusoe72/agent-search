@@ -1,0 +1,8 @@
+{
+  "maximum_observed_concurrency": 2,
+  "third_safe_request_waits_for_capacity": true,
+  "unsafe_initial_request_blocked": true,
+  "unsafe_navigation_blocked": true,
+  "browser_runs_as_root": false,
+  "browser_sandbox_enabled": true
+}

@@ -2,14 +2,16 @@
 """AgentSearch MCP Tool Server — wraps localhost:3939 as MCP tools."""
 
 import argparse
+import ipaddress
 import json
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import TextContent, Tool
+from mcp.types import CallToolResult, TextContent, Tool
 
 BASE_URL = "http://localhost:3939"
 
@@ -21,7 +23,6 @@ def load_token() -> str | None:
         return env_token.strip()
 
     candidates = [
-        Path.cwd() / "credentials" / "agent-search-token.txt",
         Path.home() / ".openclaw" / "workspace" / "credentials" / "agent-search-token.txt",
         Path.home() / ".config" / "agent-search" / "token",
     ]
@@ -36,7 +37,36 @@ def load_token() -> str | None:
     return None
 
 
-def make_server(base_url: str, token: str | None = None) -> Server:
+def validate_transport(base_url: str, token: str | None, *, allow_insecure_http: bool = False) -> str:
+    """Reject remote plaintext bearer-token transport unless explicitly opted in."""
+    normalized = base_url.rstrip("/")
+    parsed = urlparse(normalized)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("base_url must be an absolute HTTP(S) URL")
+    if not token or parsed.scheme == "https" or allow_insecure_http:
+        return normalized
+    hostname = parsed.hostname.lower().rstrip(".")
+    loopback = hostname == "localhost" or hostname.endswith(".localhost")
+    if not loopback:
+        try:
+            loopback = ipaddress.ip_address(hostname).is_loopback
+        except ValueError:
+            loopback = False
+    if not loopback:
+        raise ValueError(
+            "Refusing to send a bearer token over non-loopback plaintext HTTP; "
+            "use HTTPS or pass --allow-insecure-http explicitly"
+        )
+    return normalized
+
+
+def make_server(
+    base_url: str,
+    token: str | None = None,
+    *,
+    allow_insecure_http: bool = False,
+) -> Server:
+    base_url = validate_transport(base_url, token, allow_insecure_http=allow_insecure_http)
     server = Server("agent-search")
     timeout = httpx.Timeout(120, connect=10)
     headers = {"Authorization": f"Bearer {token}"} if token else None
@@ -53,7 +83,7 @@ def make_server(base_url: str, token: str | None = None) -> Server:
         return [
             Tool(
                 name="health",
-                description="Check AgentSearch, SearXNG, and live search health.",
+                description="Check AgentSearch and bounded SearXNG readiness without issuing a search.",
                 inputSchema={"type": "object", "properties": {}},
             ),
             Tool(
@@ -234,7 +264,13 @@ def make_server(base_url: str, token: str | None = None) -> Server:
         ]
 
     @server.call_tool()
-    async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+    async def call_tool(name: str, arguments: dict) -> list[TextContent] | CallToolResult:
+        def _error(message: str) -> CallToolResult:
+            return CallToolResult(
+                content=[TextContent(type="text", text=message)],
+                isError=True,
+            )
+
         try:
             async with httpx.AsyncClient(base_url=base_url, timeout=timeout, headers=headers) as client:
                 if name == "health":
@@ -320,25 +356,34 @@ def make_server(base_url: str, token: str | None = None) -> Server:
                     r = await client.get("/search/jobs", params=params)
 
                 else:
-                    return [TextContent(type="text", text=f"Unknown tool: {name}")]
+                    return _error(f"Unknown tool: {name}")
 
                 r.raise_for_status()
                 return [TextContent(type="text", text=json.dumps(r.json(), indent=2))]
 
         except httpx.ConnectError:
-            return [TextContent(type="text", text=f"Error: Cannot connect to AgentSearch at {base_url}. Is it running?")]
+            return _error(f"Cannot connect to AgentSearch at {base_url}. Is it running?")
         except httpx.TimeoutException:
-            return [TextContent(type="text", text=f"Error: Request to AgentSearch timed out.")]
+            return _error("Request to AgentSearch timed out.")
         except httpx.HTTPStatusError as e:
-            return [TextContent(type="text", text=f"Error: AgentSearch returned HTTP {e.response.status_code}: {e.response.text[:500]}")]
+            return _error(f"AgentSearch returned HTTP {e.response.status_code}: {e.response.text[:500]}")
         except Exception as e:
-            return [TextContent(type="text", text=f"Error: {type(e).__name__}: {e}")]
+            return _error(f"{type(e).__name__}: {e}")
 
     return server
 
 
-async def main(base_url: str, token: str | None = None):
-    server = make_server(base_url, token=token or load_token())
+async def main(
+    base_url: str,
+    token: str | None = None,
+    *,
+    allow_insecure_http: bool = False,
+):
+    server = make_server(
+        base_url,
+        token=token or load_token(),
+        allow_insecure_http=allow_insecure_http,
+    )
     async with stdio_server() as (read, write):
         await server.run(read, write, server.create_initialization_options())
 
@@ -348,9 +393,22 @@ def cli() -> None:
     parser = argparse.ArgumentParser(description="AgentSearch MCP Server")
     parser.add_argument("--port", type=int, default=3939, help="AgentSearch port (default: 3939)")
     parser.add_argument("--host", default="localhost", help="AgentSearch host (default: localhost)")
-    parser.add_argument("--token", default=None, help="AgentSearch bearer token (default: env or local credential file)")
+    parser.add_argument("--base-url", default=None, help="Complete AgentSearch HTTP(S) base URL")
+    parser.add_argument("--token", default=None, help="AgentSearch bearer token (default: env or user credential file)")
+    parser.add_argument(
+        "--allow-insecure-http",
+        action="store_true",
+        help="Explicitly permit a bearer token over remote plaintext HTTP",
+    )
     args = parser.parse_args()
-    asyncio.run(main(f"http://{args.host}:{args.port}", token=args.token))
+    base_url = args.base_url or f"http://{args.host}:{args.port}"
+    asyncio.run(
+        main(
+            base_url,
+            token=args.token,
+            allow_insecure_http=args.allow_insecure_http,
+        )
+    )
 
 
 if __name__ == "__main__":

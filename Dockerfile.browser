@@ -1,0 +1,18 @@
+ARG PYTHON_BASE_IMAGE=python@sha256:9e01bf1ae5db7649a236da7be1e94ffbbbdd7a93f867dd0d8d5720d9e1f89fab
+FROM ${PYTHON_BASE_IMAGE}
+
+RUN apt-get update && apt-get install -y --no-install-recommends chromium chromium-sandbox \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY app/ ./app/
+
+RUN groupadd --system --gid 10002 browser \
+    && useradd --system --uid 10002 --gid browser --home-dir /app browser \
+    && chown -R browser:browser /app
+
+USER browser
+EXPOSE 3941
+CMD ["uvicorn", "app.browser_service:app", "--host", "0.0.0.0", "--port", "3941"]

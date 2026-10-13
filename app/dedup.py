@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import re
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from app.models import SearchResult
+from app.url_utils import hostname_matches, normalize_hostname
 
 
 # Domain authority scores
@@ -47,21 +47,45 @@ def clean_result_url(url: str) -> str:
     parsed = urlparse(url)
     if not parsed.query:
         return url
-    params = [
+    params = sorted([
         (key, value)
         for key, value in parse_qsl(parsed.query, keep_blank_values=True)
         if key.lower() not in TRACKING_PARAMS and not key.lower().startswith("utm_")
-    ]
+    ], key=lambda item: (item[0].lower(), item[1]))
     return urlunparse(parsed._replace(query=urlencode(params, doseq=True)))
 
 
 def _normalize_url(url: str) -> str:
-    """Normalize URL for dedup comparison (strip trailing slash, www, fragments)."""
+    """Normalize URL for dedup while preserving meaningful query identity."""
     parsed = urlparse(clean_result_url(url))
-    host = parsed.hostname or ""
-    host = re.sub(r"^www\.", "", host)
+    host = normalize_hostname(url)
     path = parsed.path.rstrip("/")
-    return f"{host}{path}"
+    query = f"?{parsed.query}" if parsed.query else ""
+    return f"{host}{path}{query}"
+
+
+def _normalize_engines(value: object) -> list[str]:
+    """Normalize optional provider engine metadata into unique names."""
+    if isinstance(value, str):
+        candidates = [value]
+    elif isinstance(value, (list, tuple, set)):
+        candidates = list(value)
+    else:
+        candidates = []
+    engines: list[str] = []
+    for candidate in candidates:
+        name = str(candidate or "").strip()
+        if name and name not in engines:
+            engines.append(name)
+    return engines
+
+
+def _domain_authority(url: str) -> float:
+    hostname = normalize_hostname(url)
+    for domain, score in DOMAIN_AUTHORITY.items():
+        if hostname_matches(hostname, domain):
+            return score
+    return 0.2
 
 
 def deduplicate(raw_results: list[dict]) -> list[SearchResult]:
@@ -78,9 +102,7 @@ def deduplicate(raw_results: list[dict]) -> list[SearchResult]:
             continue
 
         norm = _normalize_url(url)
-        engines = r.get("engines", [])
-        if isinstance(engines, str):
-            engines = [engines]
+        engines = _normalize_engines(r.get("engines"))
 
         if norm in seen:
             existing = seen[norm]
@@ -111,7 +133,11 @@ def deduplicate(raw_results: list[dict]) -> list[SearchResult]:
                 url=item["url"],
                 snippet=item["snippet"],
                 engines=item["engines"],
-                score=round(len(item["engines"]) / max(len(set().union(*(r.get("engines", []) if isinstance(r.get("engines"), list) else [r.get("engines", "")] for r in raw_results))), 1), 2),
+                score=round(
+                    len(item["engines"])
+                    / max(len({engine for row in raw_results for engine in _normalize_engines(row.get("engines"))}), 1),
+                    2,
+                ),
                 position=i + 1,
             )
         )
@@ -129,9 +155,7 @@ def deduplicate_with_scoring(raw_results: list[dict]) -> list[SearchResult]:
             continue
 
         norm = _normalize_url(url)
-        engines = r.get("engines", [])
-        if isinstance(engines, str):
-            engines = [engines]
+        engines = _normalize_engines(r.get("engines"))
 
         if norm in seen:
             existing = seen[norm]
@@ -157,13 +181,19 @@ def deduplicate_with_scoring(raw_results: list[dict]) -> list[SearchResult]:
     # Calculate enhanced scores
     results: list[SearchResult] = []
     
+    all_engines = {
+        engine
+        for row in raw_results
+        for engine in _normalize_engines(row.get("engines"))
+    }
+    engine_denominator = max(len(all_engines), 1)
+
     for item in seen.values():
         # Engine agreement score (0-1)
-        engine_score = len(item["engines"]) / len(set().union(*(r.get("engines", []) if isinstance(r.get("engines"), list) else [r.get("engines", "")] for r in raw_results if r.get("engines"))))
+        engine_score = len(item["engines"]) / engine_denominator
         
         # Domain authority score (0-1)
-        domain = urlparse(item["url"]).netloc.lower()
-        domain_score = DOMAIN_AUTHORITY.get(domain, 0.2)  # Default low score for unknown domains
+        domain_score = _domain_authority(item["url"])
         
         # Position score (0-1, higher for better positions)
         position_score = 1.0 / (1.0 + item["best_position"] / 10.0)

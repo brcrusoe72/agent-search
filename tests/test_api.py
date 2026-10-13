@@ -433,6 +433,29 @@ def test_health_endpoint(client: AppClient) -> None:
     assert data["search_available"] is True
     assert data["upstream_status"] == "ok"
     assert data["version"] == "2.0.0"
+    assert data["network_route"] == "direct"
+
+
+def test_live_endpoint_never_calls_upstream(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
+    class ExplodingClient:
+        async def get(self, *args, **kwargs):
+            raise AssertionError("liveness must not call upstream")
+
+    monkeypatch.setattr(main, "http_client", ExplodingClient())
+    response = client.get("/live")
+    assert response.status_code == 200
+    assert response.json()["status"] == "alive"
+
+
+def test_ready_returns_503_when_searxng_is_unusable(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
+    class DownClient:
+        async def get(self, *args, **kwargs):
+            raise OSError("offline")
+
+    monkeypatch.setattr(main, "http_client", DownClient())
+    response = client.get("/ready")
+    assert response.status_code == 503
+    assert response.json()["searxng_available"] is False
 
 
 def test_engines_endpoint(client: AppClient) -> None:
@@ -816,6 +839,11 @@ def test_browser_render_ignores_close_errors(monkeypatch: pytest.MonkeyPatch) ->
             return FakeLocator()
 
         async def evaluate(self, script: str, max_links: int):
+            if "outerHTML" in script:
+                body = "Rendered body content " * 20
+                return f"<html><body><main><p>{body}</p></main><a href='https://example.com/docs'>Docs</a></body></html>"
+            if "document.body?.innerText" in script:
+                return "Rendered body content " * 20
             return [{"text": "Docs", "href": "https://example.com/docs"}]
 
     class FakeContext:
@@ -857,7 +885,7 @@ def test_browser_render_ignores_close_errors(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(browser_renderer, "is_safe_url", lambda url, verbose=False: True)
     monkeypatch.setattr(browser_renderer, "_default_chromium_path", lambda: "/usr/bin/chromium")
 
-    result = asyncio.run(browser_renderer.render_browser_page("https://example.com/app", max_links=5))
+    result = asyncio.run(browser_renderer.render_browser_page_local("https://example.com/app", max_links=5))
 
     assert result.success is True
     assert result.title == "Example App"
@@ -891,6 +919,11 @@ def test_browser_render_rejects_http_error_pages(monkeypatch: pytest.MonkeyPatch
 
         def locator(self, selector: str) -> FakeLocator:
             return FakeLocator()
+
+        async def evaluate(self, script: str, limit: int):
+            if "outerHTML" in script:
+                return "<html><body><main>" + "Rendered error page content " * 20 + "</main></body></html>"
+            return "Rendered error page content " * 20
 
     class FakeContext:
         async def new_page(self) -> FakePage:
@@ -931,7 +964,7 @@ def test_browser_render_rejects_http_error_pages(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(browser_renderer, "is_safe_url", lambda url, verbose=False: True)
     monkeypatch.setattr(browser_renderer, "_default_chromium_path", lambda: "/usr/bin/chromium")
 
-    result = asyncio.run(browser_renderer.render_browser_page("https://example.com/missing"))
+    result = asyncio.run(browser_renderer.render_browser_page_local("https://example.com/missing"))
 
     assert result.success is False
     assert result.content is None
@@ -1016,18 +1049,18 @@ def test_upstream_metadata_marks_partial_provider_failure_degraded() -> None:
     assert metadata["upstream_errors"] == ["semantic scholar: 429"]
 
 
-def test_health_degrades_when_search_probe_has_no_results(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
+def test_health_does_not_amplify_into_search_probe(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
     monkeypatch.setattr(main, "http_client", UnresponsiveFakeSearxngClient())
 
     response = client.get("/health")
 
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "degraded"
+    assert data["status"] == "healthy"
     assert data["searxng_available"] is True
-    assert data["search_available"] is False
-    assert data["upstream_status"] == "degraded"
-    assert data["unresponsive_engines"] == ["duckduckgo", "brave"]
+    assert data["search_available"] is True
+    assert data["upstream_status"] == "ok"
+    assert data["unresponsive_engines"] == []
 
 
 def test_query_database_async_methods_use_bounded_sqlite(tmp_path) -> None:
@@ -1203,22 +1236,16 @@ def test_direct_strategy_blocks_unsafe_redirect_before_following(monkeypatch: py
 def test_adapter_safe_requests_get_blocks_unsafe_redirect(monkeypatch: pytest.MonkeyPatch) -> None:
     requested_urls: list[str] = []
 
-    class RedirectResponse:
-        status_code = 302
-        headers = {"Location": "http://127.0.0.1/private"}
-
-        def close(self) -> None:
-            pass
-
     def fake_getaddrinfo(*args, **kwargs):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
 
-    def fake_get(url: str, **kwargs) -> RedirectResponse:
-        requested_urls.append(url)
-        return RedirectResponse()
+    def handle(request):
+        requested_urls.append(str(request.url))
+        return httpx.Response(302, headers={"Location": "http://127.0.0.1/private"})
 
     monkeypatch.setattr(killchain.socket, "getaddrinfo", fake_getaddrinfo)
-    monkeypatch.setattr("adapters.safe_fetch.requests.get", fake_get)
+    monkeypatch.setattr("adapters.safe_fetch._sync_client", lambda **kwargs:
+                        httpx.Client(transport=httpx.MockTransport(handle)))
 
     with pytest.raises(killchain.UnsafeRedirectError):
         safe_requests_get("https://safe.example/start", timeout=15)

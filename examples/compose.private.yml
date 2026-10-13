@@ -15,30 +15,19 @@
 #   :3940 = anonymized via Tor (slower, private)
 
 services:
-  # === Encrypted DNS — CoreDNS forwarding to Cloudflare over DoT ===
+  # === Extend the base encrypted-DNS service onto the Tor-only network ===
   dns:
-    image: ${COREDNS_IMAGE:-coredns/coredns@sha256:b21d26b915e10acb5bc78715c1e8b6047ab2675389b2bcc18b3a6499d90e74c0}
-    container_name: agent-search-dns
-    command: ["-conf", "/etc/coredns/Corefile"]
-    volumes:
-      - ./examples/Corefile:/etc/coredns/Corefile:ro
     networks:
       agent-search:
         ipv4_address: 172.30.0.10
-    restart: unless-stopped
+      tor-internal:
+        ipv4_address: 172.31.0.10
 
   # Augment existing services with encrypted DNS
   searxng:
     dns:
       - 172.30.0.10
     depends_on:
-      - dns
-
-  api:
-    dns:
-      - 172.30.0.10
-    depends_on:
-      - searxng
       - dns
 
   # === Tor with Snowflake obfuscation ===
@@ -52,8 +41,9 @@ services:
       agent-search:
         ipv4_address: 172.30.0.20
       tor-internal:
+        ipv4_address: 172.31.0.20
     dns:
-      - 172.30.0.10
+      - 172.31.0.10
     restart: unless-stopped
 
   # === Private SearXNG — all traffic through Tor ===
@@ -66,9 +56,85 @@ services:
     environment:
       - SEARXNG_BASE_URL=http://searxng-private:8080/
     networks:
-      - tor-internal    # NO direct egress — only path out is Tor
+      tor-internal:
+        ipv4_address: 172.31.0.30  # NO direct egress — only path out is Tor
+    dns:
+      - 172.31.0.10
     depends_on:
       - tor
+    restart: unless-stopped
+
+  # Validates every private fetch destination and connects through Tor only.
+  fetch-proxy-private:
+    build:
+      context: .
+      dockerfile: Dockerfile.proxy
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python@sha256:9e01bf1ae5db7649a236da7be1e94ffbbbdd7a93f867dd0d8d5720d9e1f89fab}
+    container_name: agent-search-fetch-proxy-private
+    environment:
+      - FETCH_PROXY_TOR=tor:9050
+      - FETCH_PROXY_MAX_CONCURRENT=64
+    networks:
+      tor-internal:
+        ipv4_address: 172.31.0.31
+    depends_on:
+      - tor
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 128m
+    cpus: 0.50
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8888/live',timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  browser-private:
+    build:
+      context: .
+      dockerfile: Dockerfile.browser
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python@sha256:9e01bf1ae5db7649a236da7be1e94ffbbbdd7a93f867dd0d8d5720d9e1f89fab}
+    container_name: agent-search-browser-private
+    environment:
+      - BROWSER_LOCAL_RENDER_ENABLED=1
+      - BROWSER_PROXY_URL=http://fetch-proxy-private:8888
+      - BROWSER_MAX_CONCURRENT=2
+      - HOME=/tmp/browser-home
+      - XDG_CACHE_HOME=/tmp/browser-cache
+      - XDG_CONFIG_HOME=/tmp/browser-config
+    networks:
+      tor-internal:
+        ipv4_address: 172.31.0.32
+    dns:
+      - 172.31.0.10
+    depends_on:
+      dns:
+        condition: service_started
+      fetch-proxy-private:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,nosuid
+    cap_drop: [ALL]
+    cap_add: [SYS_CHROOT]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./examples/chromium-seccomp.json
+    pids_limit: 256
+    mem_limit: 768m
+    cpus: 1.00
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3941/live',timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
     restart: unless-stopped
 
   # TCP forwarder: host:3940 → api-private:3939
@@ -79,10 +145,18 @@ services:
     ports:
       - "127.0.0.1:3940:3939"
     networks:
-      - agent-search
-      - tor-internal
+      agent-search:
+        ipv4_address: 172.30.0.33
+      tor-internal:
+        ipv4_address: 172.31.0.34
     depends_on:
       - api-private
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 32m
+    cpus: 0.25
     restart: unless-stopped
 
   api-private:
@@ -97,18 +171,41 @@ services:
       - RATE_LIMIT=60
       - ADAPTERS_DIR=/app/adapters
       - AGENT_SEARCH_TOKEN=${AGENT_SEARCH_TOKEN:-}
-      - ALL_PROXY=socks5h://tor:9050
-      - HTTP_PROXY=socks5h://tor:9050
-      - HTTPS_PROXY=socks5h://tor:9050
-      - NO_PROXY=searxng-private,tor,localhost,127.0.0.1
+      - FETCH_PROXY_URL=http://fetch-proxy-private:8888
+      - HTTP_PROXY=http://fetch-proxy-private:8888
+      - HTTPS_PROXY=http://fetch-proxy-private:8888
+      - NO_PROXY=searxng-private,browser-private,fetch-proxy-private,tor,localhost,127.0.0.1
+      - BROWSER_SERVICE_URL=http://browser-private:3941
+      - BROWSER_SERVICE_MAX_CONCURRENT=2
+      - NETWORK_ROUTE=tor
     depends_on:
-      - searxng-private
-      - tor
+      searxng-private:
+        condition: service_started
+      fetch-proxy-private:
+        condition: service_healthy
+      browser-private:
+        condition: service_healthy
     volumes:
       - agent-search-data-tor:/app/data
       - ./adapters:/app/adapters:ro
     networks:
-      - tor-internal    # NO direct egress
+      tor-internal:
+        ipv4_address: 172.31.0.33  # NO direct egress
+    dns:
+      - 172.31.0.10
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    mem_limit: 768m
+    cpus: 1.00
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3939/live',timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
     restart: unless-stopped
 
 networks:
@@ -121,6 +218,9 @@ networks:
   tor-internal:
     driver: bridge
     internal: true    # No NAT, no egress, no internet route
+    ipam:
+      config:
+        - subnet: 172.31.0.0/24
 
 volumes:
   agent-search-data-tor:

@@ -1,0 +1,8 @@
+{
+  "results": [
+    {"url": "https://youtube.com/watch?v=AAA&utm_source=test", "title": "Video A", "engines": ["bing"]},
+    {"url": "https://youtube.com/watch?v=BBB", "title": "Video B", "engines": ["bing"]},
+    {"url": "https://example.com/a", "title": "Missing engines result"},
+    {"url": "https://example.com/a?utm_campaign=duplicate", "title": "Duplicate tracking result", "engines": "duckduckgo"}
+  ]
+}

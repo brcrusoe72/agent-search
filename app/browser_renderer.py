@@ -8,6 +8,7 @@ extracts readable text and links, and reports challenge/block pages as failures.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 from dataclasses import dataclass, field
@@ -29,8 +30,14 @@ from app.fetch_policy import (
 
 
 BROWSER_RENDER_ENABLED = os.getenv("BROWSER_RENDER_ENABLED", "1").lower() not in {"0", "false", "no", "off"}
+BROWSER_SERVICE_URL = os.getenv("BROWSER_SERVICE_URL", "").strip().rstrip("/")
+BROWSER_LOCAL_RENDER_ENABLED = os.getenv("BROWSER_LOCAL_RENDER_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
+BROWSER_PROXY_URL = os.getenv("BROWSER_PROXY_URL", "").strip()
 BROWSER_RENDER_TIMEOUT_MS = int(os.getenv("BROWSER_RENDER_TIMEOUT_MS", "15000"))
 BROWSER_RENDER_MAX_LINKS = int(os.getenv("BROWSER_RENDER_MAX_LINKS", "50"))
+BROWSER_RENDER_MAX_HTML_CHARS = int(os.getenv("BROWSER_RENDER_MAX_HTML_CHARS", "500000"))
+BROWSER_SERVICE_MAX_CONCURRENT = max(1, int(os.getenv("BROWSER_SERVICE_MAX_CONCURRENT", "2")))
+_service_capacity = asyncio.Semaphore(BROWSER_SERVICE_MAX_CONCURRENT)
 BROWSER_RENDER_BLOCKED_DOMAINS = {
     domain.strip().lower()
     for domain in os.getenv(
@@ -90,6 +97,7 @@ class BrowserRenderResult:
     blocked_reason: str | None = None
     render_time_ms: float = 0.0
     trust: TrustResult | None = None
+    requested_trust: TrustResult | None = None
 
 
 def _hostname(url: str) -> str:
@@ -168,7 +176,7 @@ def extract_rendered_content(html: str, body_text: str, max_chars: int) -> str |
     return content
 
 
-async def render_browser_page(
+async def render_browser_page_local(
     url: str,
     *,
     max_chars: int | None = None,
@@ -180,10 +188,21 @@ async def render_browser_page(
     effective_max_chars = max_chars or MAX_CONTENT_CHARS
     effective_max_links = max_links if max_links is not None else BROWSER_RENDER_MAX_LINKS
     effective_timeout_ms = timeout_ms or BROWSER_RENDER_TIMEOUT_MS
-    trust = evaluate_trust(url, check_whois=False)
+    requested_trust = evaluate_trust(url, check_whois=False)
 
     def _result(**kwargs: Any) -> BrowserRenderResult:
-        result = BrowserRenderResult(url=url, trust=trust, **kwargs)
+        final_url = str(kwargs.get("final_url") or "")
+        actual_trust = (
+            evaluate_trust(final_url, check_whois=False)
+            if final_url
+            else requested_trust
+        )
+        result = BrowserRenderResult(
+            url=url,
+            trust=actual_trust,
+            requested_trust=requested_trust,
+            **kwargs,
+        )
         result.render_time_ms = round((time.monotonic() - start) * 1000, 1)
         return result
 
@@ -209,13 +228,18 @@ async def render_browser_page(
             browser = await pw.chromium.launch(
                 headless=True,
                 executable_path=executable_path,
+                # Override Playwright's disabling default for Chromium. Keep
+                # the browser's own namespace sandbox enabled inside the
+                # already nonroot, minimally privileged worker container.
+                chromium_sandbox=True,
                 args=[
-                    "--no-sandbox",
+                    "--disable-crash-reporter",
+                    "--disable-crashpad",
                     "--disable-dev-shm-usage",
                     "--disable-gpu",
                     "--disable-extensions",
                     "--disable-background-networking",
-                ],
+                ] + ([f"--proxy-server={BROWSER_PROXY_URL}"] if BROWSER_PROXY_URL else []),
             )
             context = await browser.new_context(
                 user_agent=USER_AGENTS[0],
@@ -250,7 +274,6 @@ async def render_browser_page(
             except PlaywrightTimeoutError:
                 # Network-idle is best effort; DOM content is enough for extraction.
                 pass
-
             final_url = page.url
             if not is_safe_url(final_url, verbose=True):
                 return _result(
@@ -267,9 +290,15 @@ async def render_browser_page(
                 )
 
             title = await page.title()
-            html = await page.content()
+            html = await page.evaluate(
+                "(limit) => (document.documentElement?.outerHTML || '').slice(0, limit)",
+                BROWSER_RENDER_MAX_HTML_CHARS,
+            )
             try:
-                body_text = await page.locator("body").inner_text(timeout=1000)
+                body_text = await page.evaluate(
+                    "(limit) => (document.body?.innerText || '').slice(0, limit)",
+                    max(effective_max_chars * 2, 10000),
+                )
             except Exception:
                 body_text = ""
 
@@ -331,3 +360,73 @@ async def render_browser_page(
             except Exception:
                 # Browser teardown should not override the render result.
                 pass
+
+
+async def render_browser_page(
+    url: str,
+    *,
+    max_chars: int | None = None,
+    max_links: int | None = None,
+    timeout_ms: int | None = None,
+) -> BrowserRenderResult:
+    """Render through the dedicated worker, with explicit local opt-in only."""
+    if BROWSER_SERVICE_URL:
+        import httpx
+
+        try:
+            total_timeout = (timeout_ms or BROWSER_RENDER_TIMEOUT_MS) / 1000 + 5
+
+            async def _request() -> dict:
+                async with _service_capacity:
+                    async with httpx.AsyncClient(timeout=total_timeout) as client:
+                        response = await client.post(
+                            f"{BROWSER_SERVICE_URL}/render",
+                            json={
+                                "url": url,
+                                "max_chars": max_chars,
+                                "max_links": max_links,
+                                "timeout_ms": timeout_ms,
+                            },
+                        )
+                        response.raise_for_status()
+                        return response.json()
+
+            data = await asyncio.wait_for(_request(), timeout=total_timeout)
+            trust_data = data.get("trust")
+            trust = TrustResult(**trust_data) if trust_data else None
+            requested_trust_data = data.get("requested_trust")
+            requested_trust = TrustResult(**requested_trust_data) if requested_trust_data else None
+            return BrowserRenderResult(
+                url=data.get("url", url),
+                final_url=data.get("final_url", ""),
+                title=data.get("title", ""),
+                content=data.get("content"),
+                chars=data.get("chars", 0),
+                links=[BrowserLink(**item) for item in data.get("links", [])],
+                success=data.get("success", False),
+                strategy=data.get("strategy", "browser-render"),
+                error=data.get("error"),
+                challenge_detected=data.get("challenge_detected", False),
+                blocked_reason=data.get("blocked_reason"),
+                render_time_ms=data.get("render_time_ms", 0.0),
+                trust=trust,
+                requested_trust=requested_trust,
+            )
+        except Exception as exc:
+            return BrowserRenderResult(
+                url=url,
+                error=f"Browser service unavailable: {type(exc).__name__}: {exc}",
+                blocked_reason="service_unavailable",
+            )
+    if BROWSER_LOCAL_RENDER_ENABLED:
+        return await render_browser_page_local(
+            url,
+            max_chars=max_chars,
+            max_links=max_links,
+            timeout_ms=timeout_ms,
+        )
+    return BrowserRenderResult(
+        url=url,
+        error="Dedicated browser service is not configured",
+        blocked_reason="service_unavailable",
+    )
