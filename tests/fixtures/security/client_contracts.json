@@ -1,0 +1,15 @@
+{
+  "read_response": {
+    "url": "https://reuters.com/original",
+    "fetched_url": "https://coverage.example/story",
+    "derived_from": "https://reuters.com/original",
+    "trust": {"domain": "coverage.example", "tier": "standard", "score": 0.5},
+    "requested_trust": {"domain": "reuters.com", "tier": "established", "score": 1.0}
+  },
+  "client_urls": [
+    {"base_url": "http://localhost:3939", "token": true},
+    {"base_url": "https://search.example", "token": true},
+    {"base_url": "http://search.example", "token": true},
+    {"base_url": "http://search.example", "token": true, "allow_insecure_http": true}
+  ]
+}

@@ -1,0 +1,5 @@
+{
+  "requested_url": "https://example.com/article",
+  "strategy": "direct",
+  "content": "A directly fetched article with enough useful content to pass extraction."
+}

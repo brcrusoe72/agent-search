@@ -1,0 +1,9 @@
+{
+  "url": "https://reuters.com/original",
+  "fetched_url": "https://coverage.example/story",
+  "derived_from": "https://reuters.com/original",
+  "trust_domain": "coverage.example",
+  "requested_trust_domain": "reuters.com",
+  "cached_under_requested_origin_only": false,
+  "sdk_preserves_all_fields": true
+}

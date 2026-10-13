@@ -1,0 +1,9 @@
+{
+  "reports": [
+    {"url": "https://example.com/page", "strategies_tried": ["direct"], "error": "client supplied"},
+    {"url": "https://example.com/page", "strategies_tried": ["direct"], "error": "client supplied"},
+    {"url": "https://example.com/page", "strategies_tried": ["direct"], "error": "client supplied"},
+    {"url": "https://example.com/page", "strategies_tried": ["direct"], "error": "client supplied"},
+    {"url": "https://example.com/page", "strategies_tried": ["direct"], "error": "client supplied"}
+  ]
+}

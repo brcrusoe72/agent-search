@@ -1,0 +1,11 @@
+{
+  "result_count": 3,
+  "urls": [
+    "https://youtube.com/watch?v=AAA",
+    "https://youtube.com/watch?v=BBB",
+    "https://example.com/a"
+  ],
+  "missing_engines_accepted": true,
+  "scores_are_finite": true,
+  "positions_are_one_based": true
+}
