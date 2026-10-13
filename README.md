@@ -33,6 +33,8 @@ cd agent-search
 
 Native mode requires Python 3.11+ and a reachable SearXNG instance with JSON output enabled. It stores AgentSearch state in `./data`. See [Native Install](docs/native-install.md).
 
+Existing Docker installations: follow [the upgrade procedure](docs/upgrading.md) before switching from a root-run image.
+
 ## Verify
 
 Run the self-contained test suite:

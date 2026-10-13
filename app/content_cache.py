@@ -107,15 +107,18 @@ class ContentCache:
         """Get cached content and its provenance, or None when unavailable."""
         h = self._url_hash(url)
         now = time.time()
-        with sqlite3.connect(self.db_path, timeout=1.0) as conn:
-            row = conn.execute(
-                """
-                SELECT content, strategy, fetched_url, derived_from
-                FROM content_cache
-                WHERE url_hash = ? AND expires_at > ?
-                """,
-                (h, now),
-            ).fetchone()
+        def _get():
+            with sqlite3.connect(self.db_path, timeout=1.0) as conn:
+                return conn.execute(
+                    """
+                    SELECT content, strategy, fetched_url, derived_from
+                    FROM content_cache
+                    WHERE url_hash = ? AND expires_at > ?
+                    """,
+                    (h, now),
+                ).fetchone()
+
+        row = await asyncio.to_thread(_get)
         result = None if not row else CachedContent(
             content=row[0],
             strategy=row[1],
@@ -142,17 +145,20 @@ class ContentCache:
 
         h = self._url_hash(url)
         now = time.time()
-        with sqlite3.connect(self.db_path, timeout=1.0) as conn:
-            conn.execute("""
-                INSERT OR REPLACE INTO content_cache
-                (url_hash, url, content, strategy, chars, created_at, expires_at,
-                 fetched_url, derived_from)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                h, url, content, strategy, len(content), now, now + ttl,
-                fetched_url or url, derived_from,
-            ))
-            conn.commit()
+        def _set():
+            with sqlite3.connect(self.db_path, timeout=1.0) as conn:
+                conn.execute("""
+                    INSERT OR REPLACE INTO content_cache
+                    (url_hash, url, content, strategy, chars, created_at, expires_at,
+                     fetched_url, derived_from)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    h, url, content, strategy, len(content), now, now + ttl,
+                    fetched_url or url, derived_from,
+                ))
+                conn.commit()
+
+        await asyncio.to_thread(_set)
         self._stats["sets"] += 1
 
     async def log_fetch(
