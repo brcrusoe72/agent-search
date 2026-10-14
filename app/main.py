@@ -369,7 +369,7 @@ SEARCH_STRATEGY_MODES: dict[str, tuple[SearchStrategyPack, ...]] = {
         _provider_pack("semantic_scholar", "semantic scholar"),
     ),
     "news": (
-        _searxng_pack("reuters", "bing news", "duckduckgo news", "wikinews"),
+        _searxng_pack("reuters", "bing news", "duckduckgo news"),
     ),
     "private": (
         _provider_pack("github", "github"),
@@ -1536,7 +1536,7 @@ async def read_batch(body: BatchReadRequest) -> BatchReadResponse:
 # NEWS ENDPOINT
 # =========================================================================
 
-NEWS_ENGINES = "reuters,bing news,duckduckgo news,wikinews"
+NEWS_ENGINES = "reuters,bing news,duckduckgo news"
 
 
 @app.get("/news", response_model=NewsResponse)

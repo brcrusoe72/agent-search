@@ -11,6 +11,10 @@ general:
   debug: false
 
 search:
+  suspended_times:
+    SearxEngineAccessDenied: 900
+    SearxEngineTooManyRequests: 300
+    SearxEngineCaptcha: 3600
   safe_search: 0
   autocomplete: ""
   default_lang: "en"
@@ -168,4 +172,35 @@ engines:
   - name: lobsters
     engine: lobsters
     shortcut: lo
+    disabled: false
+
+  - name: google images
+    disabled: false
+  - name: bing images
+    disabled: false
+  - name: duckduckgo images
+    disabled: false
+  - name: brave.images
+    disabled: false
+  - name: startpage images
+    disabled: false
+  - name: google videos
+    disabled: false
+  - name: bing videos
+    disabled: false
+  - name: brave.videos
+    disabled: false
+  - name: duckduckgo videos
+    disabled: false
+  - name: youtube
+    disabled: false
+  - name: dailymotion
+    disabled: false
+  - name: brave.news
+    disabled: false
+  - name: duckduckgo news
+    disabled: false
+  - name: qwant news
+    disabled: false
+  - name: yandex images
     disabled: false

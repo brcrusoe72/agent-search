@@ -693,11 +693,11 @@ def test_search_strategy_news_uses_requested_news_pack(monkeypatch: pytest.Monke
     response = client.get("/search", params={"q": "semiconductors", "count": 3, "mode": "news"})
 
     assert response.status_code == 200
-    assert fake.search_params[0]["engines"] == "reuters,bing news,duckduckgo news,wikinews"
+    assert fake.search_params[0]["engines"] == "reuters,bing news,duckduckgo news"
     assert "categories" not in fake.search_params[0]
     meta = response.json()["meta"]
     assert meta["mode"] == "news"
-    assert meta["engine_attempts"][0]["engines"] == ["reuters", "bing news", "duckduckgo news", "wikinews"]
+    assert meta["engine_attempts"][0]["engines"] == ["reuters", "bing news", "duckduckgo news"]
 
 
 def test_provider_stats_and_health_record_direct_attempts(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
