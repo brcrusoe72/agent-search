@@ -1,4 +1,19 @@
 . {
+    # Isolated containers use this resolver instead of Docker's resolver.
+    # Pinning internal service records avoids leaking those names upstream and
+    # keeps service discovery available without giving workers direct egress.
+    hosts {
+        172.29.0.20 searxng
+        172.29.0.21 fetch-proxy
+        172.29.0.22 browser
+        172.29.0.23 api
+        172.31.0.20 tor
+        172.31.0.30 searxng-private
+        172.31.0.31 fetch-proxy-private
+        172.31.0.32 browser-private
+        172.31.0.33 api-private
+        fallthrough
+    }
     forward . tls://1.1.1.1 tls://1.0.0.1 {
         tls_servername cloudflare-dns.com
         health_check 5s

@@ -1,0 +1,9 @@
+{
+  "url": "https://example.com/article",
+  "fetched_url": "https://example.com/article",
+  "derived_from": null,
+  "strategy": "direct",
+  "trust_domain": "example.com",
+  "requested_trust_domain": "example.com",
+  "cache_preserves_provenance": true
+}

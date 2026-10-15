@@ -15,7 +15,7 @@ MIN_CHARS = 300
 MAX_CHARS = 15000
 
 
-def fetch_content(url: str) -> str | None:
+def fetch_content(url: str) -> dict | None:
     """Try to access 403'd content via alternative methods."""
     for ua in USER_AGENTS:
         try:
@@ -37,7 +37,10 @@ def fetch_content(url: str) -> str | None:
                     tag.decompose()
                 text = soup.get_text(separator="\n", strip=True)
                 if len(text) >= MIN_CHARS:
-                    return text[:MAX_CHARS]
+                    return {
+                        "content": text[:MAX_CHARS],
+                        "fetched_url": str(r.url or url),
+                    }
         except Exception:
             continue
     return None

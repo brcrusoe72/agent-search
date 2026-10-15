@@ -28,3 +28,6 @@ compose.local.yml
 dns/
 
 # examples/ is publishable (secrets stripped) — don't ignore it
+
+.venv-mcp/
+.audit_*.py

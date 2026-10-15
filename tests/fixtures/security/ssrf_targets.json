@@ -1,0 +1,12 @@
+{
+  "targets": [
+    {"name": "public_ipv4", "url": "https://8.8.8.8/", "answers": ["8.8.8.8"]},
+    {"name": "public_ipv6", "url": "https://[2606:4700:4700::1111]/", "answers": ["2606:4700:4700::1111"]},
+    {"name": "cgnat", "url": "http://100.64.0.1/", "answers": ["100.64.0.1"]},
+    {"name": "loopback", "url": "http://127.0.0.1/", "answers": ["127.0.0.1"]},
+    {"name": "private", "url": "http://10.0.0.1/", "answers": ["10.0.0.1"]},
+    {"name": "mixed", "url": "https://mixed.example/", "answers": ["8.8.8.8", "10.0.0.1"]},
+    {"name": "dns_failure", "url": "https://missing.invalid/", "dns_error": true},
+    {"name": "rebind", "url": "https://rebind.example/", "answers": ["8.8.8.8"], "connect_answer": "127.0.0.1"}
+  ]
+}

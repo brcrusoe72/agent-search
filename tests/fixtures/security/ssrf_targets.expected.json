@@ -1,0 +1,10 @@
+{
+  "public_ipv4": {"allowed": true},
+  "public_ipv6": {"allowed": true},
+  "cgnat": {"allowed": false},
+  "loopback": {"allowed": false},
+  "private": {"allowed": false},
+  "mixed": {"allowed": false},
+  "dns_failure": {"allowed": false},
+  "rebind": {"allowed": false, "reason": "connection destination differs from validated resolution"}
+}

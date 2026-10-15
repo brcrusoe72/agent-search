@@ -10,4 +10,10 @@ COPY agent_search_mcp/ ./agent_search_mcp/
 
 RUN pip install --no-cache-dir -e .
 
+RUN groupadd --system --gid 10004 mcp \
+    && useradd --system --uid 10004 --gid mcp --home-dir /app mcp \
+    && chown -R mcp:mcp /app
+
+USER mcp
+
 ENTRYPOINT ["python", "-m", "agent_search_mcp"]

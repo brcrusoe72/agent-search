@@ -5,8 +5,8 @@ shell startup files, commits, or public notes.
 
 ## AgentSearch API Token
 
-If `AGENT_SEARCH_TOKEN` is set on the server, every endpoint except `/health`
-requires a bearer token.
+If `AGENT_SEARCH_TOKEN` is set on the server, every endpoint except `/health`,
+`/live`, and `/ready` requires a bearer token.
 
 Recommended local options, in order:
 
@@ -24,17 +24,16 @@ Recommended local options, in order:
 
    Then edit `.env.native` locally.
 
-3. Put only the AgentSearch bearer token in:
-
-   ```text
-   credentials/agent-search-token.txt
-   ```
-
-4. For a user-wide SDK/MCP token, put only the token value in:
+3. For a user-wide SDK/MCP token, put only the token value in:
 
    ```text
    ~/.config/agent-search/token
    ```
+
+The SDK and MCP server intentionally do not discover credentials relative to
+the current working directory. They also refuse to send a bearer token over
+remote plaintext HTTP unless the caller explicitly opts into insecure legacy
+transport.
 
 ## What Not To Do
 

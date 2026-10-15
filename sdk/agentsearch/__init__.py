@@ -28,6 +28,7 @@ from .models import (
     SearchMeta,
     SearchResponse,
     SearchResult,
+    TrustInfo,
 )
 
 __version__ = "0.1.0"
@@ -38,6 +39,7 @@ __all__ = [
     "SearchResponse",
     "SearchMeta",
     "ReadResult",
+    "TrustInfo",
     "BatchReadResponse",
     "BrowserLink",
     "BrowserFetchResponse",
