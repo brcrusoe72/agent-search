@@ -42,15 +42,17 @@ Run the self-contained test suite:
 ```bash
 python -m venv .venv
 . .venv/bin/activate
-pip install -r requirements.txt pytest requests
+pip install -r requirements.txt pytest requests build wheel "setuptools>=68"
 pip install -e sdk
 # MCP has a separate Pydantic requirement; keep it isolated.
 python -m venv .venv-mcp
 .venv-mcp/bin/python -m pip install -e mcp-server pytest
 .venv-mcp/bin/python -m pytest tests/test_mcp_contract.py -q
+.venv-mcp/bin/python -m pip check
 ./scripts/prepare-searxng.sh
 pytest tests -q
 python -m compileall app adapters mcp-server/agent_search_mcp scripts sdk -q
+python -m pip check
 docker compose -f docker-compose.yml config --quiet
 docker compose -f docker-compose.yml -f examples/compose.private.yml config --quiet
 docker build -t agent-search-api:test .
