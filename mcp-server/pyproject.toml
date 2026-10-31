@@ -17,3 +17,4 @@ agent-search-mcp = "agent_search_mcp.server:cli"
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
+

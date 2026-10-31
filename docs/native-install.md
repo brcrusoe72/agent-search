@@ -32,7 +32,7 @@ shell startup files like `~/.bashrc`.
 Verify:
 
 ```bash
-curl http://localhost:3939/health
+curl http://localhost:3939/live
 curl "http://localhost:3939/search?q=distributed+consensus+algorithms"
 ```
 
@@ -113,7 +113,8 @@ The native runner accepts CLI flags and equivalent environment variables:
 | `--adapters-dir` | `ADAPTERS_DIR` | `./adapters` | Extraction adapter modules |
 | `--token` | `AGENT_SEARCH_TOKEN` | empty | Optional bearer token for non-health endpoints |
 
-If `AGENT_SEARCH_TOKEN` is set, all endpoints except `/health` require:
+If `AGENT_SEARCH_TOKEN` is set, all endpoints except `/health`, `/live`, and
+`/ready` require:
 
 ```bash
 curl -H "Authorization: Bearer $AGENT_SEARCH_TOKEN" \
@@ -127,3 +128,16 @@ For safer local token storage, see [Secret Handling](secrets.md).
 - Native mode stores state under `DATA_DIR` instead of `/app/data`.
 - Docker mode still works unchanged because the container working directory is `/app`, so the default relative `data/` path maps to `/app/data`.
 - The private Tor stack still requires Docker Compose.
+
+### Adapter outbound connections
+
+Native adapter fetching validates DNS at connection time and connects only to
+validated public addresses. Ambient HTTP(S)_PROXY variables do not override
+this protection. To route adapter traffic through a trusted validating gateway,
+set `FETCH_PROXY_URL` explicitly. Compose supplies its bundled validating proxy
+for both direct and Tor stacks. A configured proxy failure never falls back to
+a direct connection. An arbitrary proxy does not supply these guarantees.
+
+The direct worker network uses `172.29.0.0/24` (RFC1918). Deployments of the
+unreleased repair using `172.32.0.0/24` must recreate that network; it is not
+private address space. Preserve named data volumes during that recreation.

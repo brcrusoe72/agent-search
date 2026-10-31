@@ -1,0 +1,6 @@
+{
+  "requested_url": "https://reuters.com/original",
+  "fetched_url": "https://coverage.example/story",
+  "strategy": "search-about",
+  "content": "Alternate coverage content with sufficient useful text."
+}

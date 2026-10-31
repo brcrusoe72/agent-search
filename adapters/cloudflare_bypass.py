@@ -94,6 +94,7 @@ async def extract(url: str, timeout: int = 30) -> Optional[Dict]:
                     if not _is_challenge_page(text):
                         return {
                             "content": text,
+                            "fetched_url": str(resp.url or url),
                             "strategy": "cloudflare-bypass-ua",
                             "success": True,
                         }
@@ -109,6 +110,7 @@ async def extract(url: str, timeout: int = 30) -> Optional[Dict]:
             if resp.status_code == 200 and not _is_challenge_page(resp.text):
                 return {
                     "content": resp.text,
+                    "fetched_url": str(resp.url or cache_url),
                     "strategy": "cloudflare-google-cache",
                     "success": True,
                 }
@@ -123,6 +125,7 @@ async def extract(url: str, timeout: int = 30) -> Optional[Dict]:
             if resp.status_code == 200 and not _is_challenge_page(resp.text):
                 return {
                     "content": resp.text,
+                    "fetched_url": str(resp.url or wb_url),
                     "strategy": "cloudflare-wayback",
                     "success": True,
                 }

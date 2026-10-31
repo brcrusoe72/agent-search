@@ -38,6 +38,7 @@ from urllib.parse import urlparse
 
 import httpx
 from fastapi import FastAPI, Query, HTTPException
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.cache import Cache
@@ -46,6 +47,7 @@ from app.dedup import deduplicate_with_scoring
 from app.killchain import kill_chain, kill_chain_batch
 from app.query_expansion import generate_query_variations
 from app.evolver import Evolver
+from app.fetch_security import SafeAsyncHTTPTransport
 from app.source_tracer import trace_sources, get_institution_registry
 from app.database import query_db
 from app.search_providers import provider_by_name, providers_catalog
@@ -78,6 +80,7 @@ VERSION = "2.0.0"
 HEALTHCHECK_QUERY = os.getenv("HEALTHCHECK_QUERY", "python programming language")
 HEALTHCHECK_ENGINES = os.getenv("HEALTHCHECK_ENGINES", "github")
 HEALTHCHECK_SEARCH_TIMEOUT = float(os.getenv("HEALTHCHECK_SEARCH_TIMEOUT", "15"))
+NETWORK_ROUTE = os.getenv("NETWORK_ROUTE", "direct")
 SQLITE_MAINTENANCE_INTERVAL_SECONDS = max(1, int(os.getenv("SQLITE_MAINTENANCE_INTERVAL_SECONDS", "3600")))
 
 # Request logging
@@ -106,7 +109,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global http_client, content_cache, evolver
     created_http_client = http_client is None
     if http_client is None:
-        http_client = httpx.AsyncClient(timeout=30.0)
+        proxy_configured = any(
+            os.getenv(name)
+            for name in ("ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy")
+        )
+        if proxy_configured:
+            # The private stack is fail-closed at the Docker network boundary
+            # and reaches external hosts only through its configured Tor proxy.
+            http_client = httpx.AsyncClient(timeout=30.0)
+        else:
+            searxng_host = urlparse(SEARXNG_URL).hostname or ""
+            http_client = httpx.AsyncClient(
+                timeout=30.0,
+                transport=SafeAsyncHTTPTransport(
+                    allowed_hostnames=[searxng_host],
+                    limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
+                ),
+            )
     if content_cache is None:
         content_cache = ContentCache()
     if evolver is None:
@@ -189,8 +208,8 @@ _AUTH_TOKEN = os.getenv("AGENT_SEARCH_TOKEN", "")
 
 @app.middleware("http")
 async def auth_middleware(request, call_next):
-    """Bearer token auth. Skips /health for monitoring."""
-    if _AUTH_TOKEN and request.url.path != "/health":
+    """Bearer token auth. Skips system probes for monitoring."""
+    if _AUTH_TOKEN and request.url.path not in {"/health", "/live", "/ready"}:
         auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer ") or not secrets.compare_digest(auth_header[7:], _AUTH_TOKEN):
             from fastapi.responses import JSONResponse
@@ -215,8 +234,8 @@ async def rate_limit_middleware(request, call_next):
         _safe_log_value(query),
     )
 
-    # Skip rate limiting for health check
-    if path == "/health":
+    # Liveness is a local process probe and must remain cheap under pressure.
+    if path == "/live":
         return await call_next(request)
 
     # Global circuit breaker — protect SearXNG and external sources
@@ -1396,6 +1415,8 @@ async def read_url(
 
     return ReadResponse(
         url=result.url,
+        fetched_url=result.fetched_url,
+        derived_from=result.derived_from,
         content=result.content,
         strategy=result.strategy,
         chars=result.chars,
@@ -1404,6 +1425,7 @@ async def read_url(
         error=result.error,
         success=result.success,
         trust=_trust_info(result.trust),
+        requested_trust=_trust_info(result.requested_trust),
     )
 
 
@@ -1424,7 +1446,15 @@ async def browser_fetch(
         timeout_ms=timeout_ms,
     )
     if content_cache and result.success and result.content:
-        await content_cache.set(result.final_url or result.url, result.content, result.strategy)
+        fetched_url = result.final_url or result.url
+        derived_from = result.url if fetched_url != result.url else None
+        await content_cache.set(
+            result.url,
+            result.content,
+            result.strategy,
+            fetched_url=fetched_url,
+            derived_from=derived_from,
+        )
         await content_cache.log_fetch(
             result.final_url or result.url,
             result.strategy,
@@ -1436,6 +1466,8 @@ async def browser_fetch(
 
     return BrowserFetchResponse(
         url=result.url,
+        fetched_url=result.final_url or result.url,
+        derived_from=result.url if result.final_url and result.final_url != result.url else None,
         final_url=result.final_url,
         title=result.title,
         content=result.content,
@@ -1448,6 +1480,7 @@ async def browser_fetch(
         blocked_reason=result.blocked_reason,
         render_time_ms=result.render_time_ms,
         trust=_trust_info(result.trust),
+        requested_trust=_trust_info(result.requested_trust),
     )
 
 
@@ -1476,6 +1509,8 @@ async def read_batch(body: BatchReadRequest) -> BatchReadResponse:
     read_responses = [
         ReadResponse(
             url=r.url,
+            fetched_url=r.fetched_url,
+            derived_from=r.derived_from,
             content=r.content,
             strategy=r.strategy,
             chars=r.chars,
@@ -1484,6 +1519,7 @@ async def read_batch(body: BatchReadRequest) -> BatchReadResponse:
             error=r.error,
             success=r.success,
             trust=_trust_info(r.trust),
+            requested_trust=_trust_info(r.requested_trust),
         )
         for r in results
     ]
@@ -1728,13 +1764,11 @@ async def search_jobs(
 # SYSTEM ENDPOINTS
 # =========================================================================
 
-@app.get("/health", response_model=HealthResponse)
-async def health() -> HealthResponse:
-    """Health check — verifies SearXNG and live search connectivity."""
+async def _readiness_status() -> HealthResponse:
+    """Perform one bounded dependency check without issuing a search."""
     assert http_client is not None
 
     searxng_ok = False
-    search_available = False
     upstream = SearxngQueryResponse(results=[], upstream_status="unknown")
 
     try:
@@ -1744,32 +1778,41 @@ async def health() -> HealthResponse:
         upstream = _upstream_error_response(exc)
 
     if searxng_ok:
-        try:
-            engine_selection = await _resolve_engine_selection(HEALTHCHECK_ENGINES)
-            upstream = await _query_searxng(
-                HEALTHCHECK_QUERY,
-                count=1,
-                engines=engine_selection.value if engine_selection else None,
-                timeout=HEALTHCHECK_SEARCH_TIMEOUT,
-            )
-            search_available = bool(upstream.results)
-            if not search_available and upstream.upstream_status == "ok":
-                upstream.upstream_status = "degraded"
-                upstream.upstream_errors.append("Health search returned no results")
-        except Exception as exc:
-            upstream = _upstream_error_response(exc)
+        upstream.upstream_status = "ok"
 
     upstream_meta = _upstream_metadata(upstream)
-    status = "healthy" if searxng_ok and search_available and upstream_meta["upstream_status"] == "ok" else "degraded"
+    status = "healthy" if searxng_ok else "degraded"
 
-    response = HealthResponse(
+    return HealthResponse(
         status=status,
         searxng_available=searxng_ok,
-        search_available=search_available,
+        # Compatibility field: readiness of the search dependency, not a live query.
+        search_available=searxng_ok,
         version=VERSION,
+        network_route=NETWORK_ROUTE,
         **upstream_meta,
     )
+
+
+@app.get("/live")
+async def live() -> dict:
+    """Cheap process liveness probe with no upstream calls."""
+    return {"status": "alive", "version": VERSION, "network_route": NETWORK_ROUTE}
+
+
+@app.get("/ready", response_model=HealthResponse)
+async def ready():
+    """Bounded dependency readiness probe; unusable dependencies return 503."""
+    response = await _readiness_status()
+    if response.status != "healthy":
+        return JSONResponse(status_code=503, content=response.model_dump())
     return response
+
+
+@app.get("/health", response_model=HealthResponse)
+async def health() -> HealthResponse:
+    """Compatibility health route using the bounded readiness check."""
+    return await _readiness_status()
 
 
 @app.get("/providers/stats")

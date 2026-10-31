@@ -13,7 +13,7 @@ MIN_CHARS = 300
 MAX_CHARS = 15000
 
 
-def fetch_content(url: str) -> str | None:
+def fetch_content(url: str) -> dict | None:
     """Extract text from malformed HTML using regex fallback."""
     try:
         r = safe_requests_get(
@@ -34,7 +34,10 @@ def fetch_content(url: str) -> str | None:
         text = re.sub(r"(\n\s*){3,}", "\n\n", text)
 
         if len(text) >= MIN_CHARS:
-            return text[:MAX_CHARS]
+            return {
+                "content": text[:MAX_CHARS],
+                "fetched_url": str(r.url or url),
+            }
 
         return None
     except Exception as exc:

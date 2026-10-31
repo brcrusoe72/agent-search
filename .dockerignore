@@ -1,0 +1,11 @@
+.git
+.venv*
+__pycache__
+**/__pycache__
+.pytest_cache
+.env*
+credentials
+searxng/settings.yml
+searxng/settings.tor.yml
+data
+.audit_*.py

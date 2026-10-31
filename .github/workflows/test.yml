@@ -41,15 +41,19 @@ jobs:
           print("imports ok")
           PY
 
+      - name: Check API dependency consistency
+        run: python -m pip check
+
       - name: Check MCP package in isolated env
         run: |
           for mcp_version in 1.27.2 2.2.0; do
             mcp_venv="/tmp/agentsearch-mcp-${mcp_version}"
             python -m venv "${mcp_venv}"
             "${mcp_venv}/bin/python" -m pip install --upgrade pip
-            "${mcp_venv}/bin/python" -m pip install "mcp==${mcp_version}" -e mcp-server
+            "${mcp_venv}/bin/python" -m pip install "mcp==${mcp_version}" -e mcp-server pytest
             "${mcp_venv}/bin/python" -m agent_search_mcp --help
-            "${mcp_venv}/bin/python" mcp-server/tests/protocol_smoke.py
+            "${mcp_venv}/bin/python" -m pytest tests/test_mcp_contract.py -q
+            "${mcp_venv}/bin/python" -m pip check
           done
 
       - name: Build Python packages
@@ -68,3 +72,4 @@ jobs:
           docker build -t agent-search-api:test .
           docker build -t agent-search-mcp:test mcp-server
           docker build -t agent-search-tor:test examples/torproxy
+

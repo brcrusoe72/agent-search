@@ -1,9 +1,8 @@
 ARG PYTHON_BASE_IMAGE=python@sha256:9e01bf1ae5db7649a236da7be1e94ffbbbdd7a93f867dd0d8d5720d9e1f89fab
 FROM ${PYTHON_BASE_IMAGE}
 
-# System deps for PDF extraction, yt-dlp, and browser-render extraction
+# System dependency for YouTube transcript extraction.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    chromium \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
@@ -16,7 +15,12 @@ COPY app/ ./app/
 
 # Copy adapters and create data directory
 COPY adapters/ ./adapters/
-RUN mkdir -p /app/data
+RUN groupadd --system --gid 10001 agentsearch \
+    && useradd --system --uid 10001 --gid agentsearch --home-dir /app agentsearch \
+    && mkdir -p /app/data \
+    && chown -R agentsearch:agentsearch /app
+
+USER agentsearch
 
 EXPOSE 3939
 
