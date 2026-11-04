@@ -102,19 +102,16 @@ engines:
     shortcut: bn
     disabled: false
 
-  - name: yahoo news
-    engine: yahoo_news
-    shortcut: yn
-    disabled: false
-
   - name: reuters
     engine: reuters
     shortcut: reu
     disabled: false
 
   - name: wikinews
-    engine: wikinews
     shortcut: wn
+    disabled: false
+
+  - name: duckduckgo news
     disabled: false
 
   # Reference
@@ -135,18 +132,12 @@ engines:
     shortcut: hf
     disabled: false
 
-  - name: reddit
-    engine: reddit
-    shortcut: re
-    disabled: false
-
   - name: hackernews
     engine: hackernews
     shortcut: hn
     disabled: false
 
   - name: stackoverflow
-    engine: stackoverflow
     shortcut: so
     disabled: false
 
@@ -158,11 +149,6 @@ engines:
   - name: docker hub
     engine: docker_hub
     shortcut: dh
-    disabled: false
-
-  - name: lobsters
-    engine: lobsters
-    shortcut: lo
     disabled: false
 
 outgoing:

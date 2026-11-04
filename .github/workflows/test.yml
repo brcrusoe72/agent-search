@@ -76,3 +76,6 @@ jobs:
 
       - name: Verify sandboxed browser startup
         run: python scripts/check_browser_sandbox.py
+
+      - name: Verify bundled SearXNG engines
+        run: python scripts/check_searxng_config.py

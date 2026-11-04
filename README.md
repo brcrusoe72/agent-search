@@ -98,7 +98,7 @@ AgentSearch delegates engine support to the connected SearXNG instance. The auth
 curl "http://localhost:3939/engines"
 ```
 
-The bundled `searxng/settings.example.yml` explicitly enables 25 engines, including best-effort Google/Startpage/Yahoo entries plus Brave, Bing, DuckDuckGo, Google Scholar, Semantic Scholar, arXiv, Crossref, OpenAlex, PubMed, Bing News, Reuters, Wikinews, Wikipedia, Wikidata, Hugging Face, Reddit, Hacker News, Stack Overflow, GitHub, Docker Hub, and Lobsters.
+The bundled settings configure broad web, scholarly, news, reference, and developer sources using SearXNG 2026.9.5 (`searxng/searxng@sha256:55e1fa15a63ff04e79e213e6aa2837549877b0c6d60757cdb633ae9111cb5fea`). Both templates are checked against the pinned image in CI. Engine registration does not guarantee live availability: Google, Brave, Reuters, and other sources can still return blocks or rate limits. Inspect `/engines` and response diagnostics for the current instance. Existing runtime files need the [configuration upgrade steps](docs/upgrading.md#searxng-202695-configuration); changing the image alone does not migrate them.
 
 Run `./scripts/prepare-searxng.sh` to create ignored local runtime files at `searxng/settings.yml` and `searxng/settings.tor.yml` with generated SearXNG instance secrets. Do not commit those generated files.
 
@@ -145,7 +145,7 @@ See each repository for installation instructions and documentation.
 | `/search/sources` | GET | Source discovery with institutional filtering |
 | `/search/sources/institutions` | GET | List source registry institutions |
 | `/search/stats` | GET | Query statistics and cache metrics |
-| `/news` | GET | Structured multi-source news with reliable defaults and explicit engine overrides |
+| `/news` | GET | Structured multi-source news with upstream diagnostics and explicit engine overrides |
 
 ### Content extraction
 
@@ -207,7 +207,9 @@ curl "http://localhost:3939/search?q=AI+regulation&mode=academic&count=5"
 curl "http://localhost:3939/search?q=Python&mode=reference&count=5"
 ```
 
-Modes validate or call only their declared sources instead of falling back silently: `general` tries Bing first, then uses DuckDuckGo/Brave and direct reference/community providers only when more coverage is needed; `code` uses direct GitHub, MDN, Docker Hub, and PyPI providers; `academic` uses direct arXiv, Crossref, OpenAlex, and Semantic Scholar providers; `news` uses Reuters, Bing News, DuckDuckGo News, and Wikinews through SearXNG; `reference` uses direct Wikipedia and Wikidata providers; `community` uses direct Hacker News; `private` avoids broad general web engines.
+Modes validate or call only their declared sources instead of falling back silently: `general` queries DuckDuckGo, Brave, and Bing together, then uses direct reference/community providers when more coverage is needed; `code` uses direct GitHub, MDN, Docker Hub, and PyPI providers; `academic` uses direct arXiv, Crossref, OpenAlex, and Semantic Scholar providers; `news` uses Reuters, Bing News, and DuckDuckGo News through SearXNG; `reference` uses direct Wikipedia and Wikidata providers; `community` uses direct Hacker News; `private` avoids broad general web engines.
+
+Ordinary `/search` and `mode=general` balance query-term coverage with engine agreement, source priors, and upstream position. Scores are ranking heuristics, not probabilities of correctness. Query matching improves some irrelevant-result failures but does not establish that a result answers the question. Upstream blocks remain visible even when another engine supplies results.
 
 Each strategy response includes `meta.engine_attempts` with source/provider, query, raw result count, latency, and upstream errors so blocked or empty providers stay visible.
 
@@ -423,7 +425,7 @@ Environment variables (set in `docker-compose.yml` or `.env`):
 | Variable | Default | Description |
 |---|---|---|
 | `SEARXNG_URL` | `http://searxng:8080` | SearXNG instance URL |
-| `SEARXNG_IMAGE` | pinned SearXNG digest | SearXNG container image; override only when intentionally upgrading |
+| `SEARXNG_IMAGE` | pinned SearXNG digest (2026.9.5) | SearXNG container image; override only after a live engine comparison on the candidate |
 | `PYTHON_BASE_IMAGE` | pinned Python digest | API Docker base image; override only when intentionally upgrading |
 | `COREDNS_IMAGE` | pinned CoreDNS digest | Private-stack DNS image |
 | `SOCAT_IMAGE` | pinned socat digest | Private-stack TCP forwarder image |
