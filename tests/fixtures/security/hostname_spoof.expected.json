@@ -1,0 +1,7 @@
+{
+  "rand.org": true,
+  "reports.rand.org": true,
+  "rand.org.evil.example": false,
+  "evil-rand.org.attacker.example": false,
+  "www.brookings.edu": true
+}

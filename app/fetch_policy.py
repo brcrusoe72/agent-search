@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ipaddress
 import logging
 import os
 import socket
@@ -13,6 +12,7 @@ from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 
 from app.scrubber import scrub_content
+from app.fetch_security import validate_public_url
 
 
 logger = logging.getLogger("agentsearch.fetch_policy")
@@ -87,72 +87,19 @@ def get_blocked_domains() -> set[str]:
 
 
 def is_safe_url(url: str, verbose: bool = False) -> bool:
-    """Validate a URL before fetching or rendering it."""
+    """Validate a URL using the shared fail-closed outbound policy."""
     try:
-        parsed = urlparse(url)
-    except Exception:
-        return False
-
-    if parsed.scheme not in ("http", "https"):
+        validate_public_url(
+            url,
+            resolver=socket.getaddrinfo,
+            blocked_domains=get_blocked_domains(),
+            blocked_tlds=SUSPICIOUS_TLDS,
+        )
+        return True
+    except (TypeError, ValueError) as exc:
         if verbose:
-            logger.warning("BLOCKED: non-HTTP scheme '%s'", _safe_log_value(parsed.scheme))
+            logger.warning("BLOCKED URL %s: %s", _safe_log_value(url), exc)
         return False
-
-    hostname = parsed.hostname
-    if not hostname:
-        if verbose:
-            logger.warning("BLOCKED: no hostname in URL")
-        return False
-
-    if parsed.scheme == "http" and verbose:
-        logger.warning("DEGRADED: plain HTTP URL (no TLS) - %s", _safe_log_value(hostname))
-
-    hostname_lower = hostname.lower()
-    if hostname_lower in ("localhost", "localhost.localdomain", "127.0.0.1", "::1", "0.0.0.0"):
-        if verbose:
-            logger.warning("BLOCKED: localhost/loopback")
-        return False
-
-    for blocked in get_blocked_domains():
-        if hostname_lower == blocked or hostname_lower.endswith("." + blocked):
-            if verbose:
-                logger.warning("BLOCKED: blocked domain '%s'", _safe_log_value(blocked))
-            return False
-
-    for tld in SUSPICIOUS_TLDS:
-        if hostname_lower.endswith(tld):
-            if verbose:
-                logger.warning("BLOCKED: suspicious TLD '%s'", _safe_log_value(tld))
-            return False
-
-    try:
-        addr = ipaddress.ip_address(hostname)
-        if addr.is_private or addr.is_reserved or addr.is_loopback or addr.is_link_local:
-            if verbose:
-                logger.warning("BLOCKED: private/reserved IP %s", addr)
-            return False
-    except ValueError:
-        try:
-            resolved = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
-            for _, _, _, _, sockaddr in resolved:
-                ip_str = sockaddr[0]
-                try:
-                    addr = ipaddress.ip_address(ip_str)
-                    if addr.is_private or addr.is_reserved or addr.is_loopback or addr.is_link_local:
-                        if verbose:
-                            logger.warning(
-                                "BLOCKED: '%s' resolves to private IP %s",
-                                _safe_log_value(hostname),
-                                addr,
-                            )
-                        return False
-                except ValueError:
-                    continue
-        except (socket.gaierror, OSError) as exc:
-            if verbose:
-                logger.debug("DNS resolution failed for '%s': %s", _safe_log_value(hostname), exc)
-
-    return True
 
 
 def sanitize_content(text: str) -> str:

@@ -19,6 +19,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from app.url_utils import hostname_matches, normalize_hostname
+
 logger = logging.getLogger("agentsearch.source_tracer")
 
 
@@ -517,19 +519,24 @@ async def trace_sources(
             if not resp.is_success:
                 return []
             results = resp.json().get("results", [])
-            return [
-                {
-                    "title": r.get("title", ""),
-                    "url": r.get("url", ""),
-                    "snippet": r.get("content", r.get("snippet", "")),
+            verified = []
+            for result in results:
+                result_url = result.get("url", "")
+                if not hostname_matches(normalize_hostname(result_url), inst["domain"]):
+                    continue
+                verified.append({
+                    "title": result.get("title", ""),
+                    "url": result_url,
+                    "snippet": result.get("content", result.get("snippet", "")),
                     "institution": inst["name"],
                     "institution_id": inst["id"],
                     "domain": inst["domain"],
                     "tier": inst["tier"],
-                    "published": r.get("publishedDate", None),
-                }
-                for r in results[:5]
-            ]
+                    "published": result.get("publishedDate", None),
+                })
+                if len(verified) >= 5:
+                    break
+            return verified
         except Exception as e:
             logger.debug("Search failed for %s: %s", _safe_log_value(inst["id"]), e)
             return []
@@ -553,11 +560,11 @@ async def trace_sources(
             filtered = []
             for r in results:
                 url = r.get("url", "")
-                domain = urlparse(url).netloc.lower().replace("www.", "")
+                domain = normalize_hostname(url)
                 # Check if domain matches any known institution
                 matching_inst = None
                 for inst in INSTITUTIONS:
-                    if inst["domain"] in domain or domain.endswith("." + inst["domain"]):
+                    if hostname_matches(domain, inst["domain"]):
                         matching_inst = inst
                         break
                 if matching_inst:

@@ -1,6 +1,6 @@
 # AgentSearch
 
-Self-hosted search API for AI agents. 17 endpoints. Layered content extraction with optional browser rendering. Optional Tor-anonymized stack. No third-party search API keys, no per-query fees, no vendor lock-in. Optional local bearer auth is supported.
+Self-hosted search API for AI agents. Layered content extraction with isolated browser rendering. Optional Tor-anonymized stack. No third-party search API keys, no per-query fees, no vendor lock-in. Optional local bearer auth is supported.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![PyPI](https://img.shields.io/pypi/v/agentsearch-client)](https://pypi.org/project/agentsearch-client/)
 
@@ -14,7 +14,7 @@ curl "http://localhost:3939/search?q=distributed+consensus+algorithms"
 
 You now have a deduplicated, multi-engine search API running on `:3939`.
 
-If you enable auth, pass the token on all non-health endpoints:
+If you enable auth, pass the token on all endpoints except `/health`, `/live`, and `/ready`:
 
 ```bash
 export AGENT_SEARCH_TOKEN="change-me"
@@ -33,6 +33,8 @@ cd agent-search
 
 Native mode requires Python 3.11+ and a reachable SearXNG instance with JSON output enabled. It stores AgentSearch state in `./data`. See [Native Install](docs/native-install.md).
 
+Existing Docker installations: follow [the upgrade procedure](docs/upgrading.md) before switching from a root-run image.
+
 ## Verify
 
 Run the self-contained test suite:
@@ -41,7 +43,11 @@ Run the self-contained test suite:
 python -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt pytest requests
-pip install -e sdk -e mcp-server
+pip install -e sdk
+# MCP has a separate Pydantic requirement; keep it isolated.
+python -m venv .venv-mcp
+.venv-mcp/bin/python -m pip install -e mcp-server pytest
+.venv-mcp/bin/python -m pytest tests/test_mcp_contract.py -q
 ./scripts/prepare-searxng.sh
 pytest tests -q
 python -m compileall app adapters mcp-server/agent_search_mcp scripts sdk -q
@@ -150,7 +156,7 @@ The extraction chain escalates through strategies until one succeeds:
 9. PDF extraction (pdfplumber)
 10. YouTube transcript (yt-dlp)
 
-Every request gets SSRF protection, prompt injection detection, paywall detection, and content length caps automatically. The browser renderer uses an ephemeral context, blocks high-cost resource types by default, and reports CAPTCHA/challenge pages instead of trying to bypass them. It is for rendering target pages, not for scraping blocked search-result pages.
+Every request gets fail-closed SSRF protection, prompt injection detection, paywall detection, and streamed content limits automatically. Browser rendering runs as a dedicated non-root service on an internal-only network, uses an ephemeral sandboxed context, and can reach targets only through the validating fetch proxy. It reports CAPTCHA/challenge pages instead of trying to bypass them.
 
 ### Adaptation
 
@@ -158,13 +164,15 @@ Every request gets SSRF protection, prompt injection detection, paywall detectio
 |---|---|---|
 | `/adapt/report` | POST | Report a fetch failure for a URL |
 | `/adapt/stats` | GET | View adaptation metrics and failure patterns |
-| `/adapt/evolve` | POST | Trigger an adaptation cycle — analyzes failures, tunes config |
+| `/adapt/evolve` | POST | Analyze failures and return recommendations (read-only) |
 
 ### Infrastructure
 
 | Endpoint | Method | What it does |
 |---|---|---|
 | `/health` | GET | Health check (API + SearXNG status) |
+| `/live` | GET | Cheap process liveness check; never calls upstream search |
+| `/ready` | GET | Bounded SearXNG readiness check; returns 503 when unusable |
 | `/engines` | GET | List available search engines and their status |
 | `/providers/health` | GET | Summarize provider health from recorded live attempts |
 | `/providers/stats` | GET | Rolling provider/SearXNG attempt telemetry |
@@ -269,8 +277,10 @@ print(f"{pages.successful}/{pages.total} succeeded")
 ```
 
 For authenticated instances, pass `token=...` or use `AGENT_SEARCH_TOKEN`,
-`AGENTSEARCH_TOKEN`, `credentials/agent-search-token.txt`, or
-`~/.config/agent-search/token`.
+`AGENTSEARCH_TOKEN`, `~/.openclaw/workspace/credentials/agent-search-token.txt`,
+or `~/.config/agent-search/token`. CWD credential files are never loaded.
+Remote bearer-token connections require HTTPS unless the SDK caller explicitly
+sets `allow_insecure_http=True`.
 
 ### LangChain tool
 

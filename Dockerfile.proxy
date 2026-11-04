@@ -1,0 +1,12 @@
+ARG PYTHON_BASE_IMAGE=python@sha256:9e01bf1ae5db7649a236da7be1e94ffbbbdd7a93f867dd0d8d5720d9e1f89fab
+FROM ${PYTHON_BASE_IMAGE}
+
+WORKDIR /app
+COPY app/__init__.py app/fetch_proxy.py ./app/
+RUN groupadd --system --gid 10003 fetchproxy \
+    && useradd --system --uid 10003 --gid fetchproxy --home-dir /app fetchproxy \
+    && chown -R fetchproxy:fetchproxy /app
+
+USER fetchproxy
+EXPOSE 8888
+CMD ["python", "-m", "app.fetch_proxy"]

@@ -15,7 +15,7 @@ MIN_CHARS = 300
 MAX_CHARS = 15000
 
 
-def fetch_content(url: str) -> str | None:
+def fetch_content(url: str) -> dict | None:
     """Extract content from pages with poor HTML structure."""
     try:
         r = safe_requests_get(
@@ -49,7 +49,10 @@ def fetch_content(url: str) -> str | None:
 
             if candidates:
                 candidates.sort(reverse=True)
-                return candidates[0][1][:MAX_CHARS]
+                return {
+                    "content": candidates[0][1][:MAX_CHARS],
+                    "fetched_url": str(r.url or url),
+                }
 
         return None
     except Exception as exc:
