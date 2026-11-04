@@ -120,6 +120,16 @@ SearXNG finds pages. AgentSearch fetches and reads them, scores and deduplicates
 | **Adaptive (failure analysis)** | ✅ (evolver) | ❌ | ❌ | ❌ | ❌ |
 | **Tor anonymization** | Optional | ❌ | ❌ | ❌ | Manual |
 
+## Related projects
+
+For narrower tasks, these separate projects in the same GitHub account may be useful:
+
+- **[scholar](https://github.com/brcrusoe72/scholar-cli)**: scholarly search.
+- **[agent-read](https://github.com/brcrusoe72/agent-read)**: URL-to-text extraction.
+- **[agent-web](https://github.com/brcrusoe72/agent-web)**: browser interaction.
+
+See each repository for installation instructions and documentation.
+
 ## Endpoints
 
 ### Search
