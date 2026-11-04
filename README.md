@@ -42,15 +42,17 @@ Run the self-contained test suite:
 ```bash
 python -m venv .venv
 . .venv/bin/activate
-pip install -r requirements.txt pytest requests
+pip install -r requirements.txt pytest requests build wheel "setuptools>=68"
 pip install -e sdk
 # MCP has a separate Pydantic requirement; keep it isolated.
 python -m venv .venv-mcp
 .venv-mcp/bin/python -m pip install -e mcp-server pytest
 .venv-mcp/bin/python -m pytest tests/test_mcp_contract.py -q
+.venv-mcp/bin/python -m pip check
 ./scripts/prepare-searxng.sh
 pytest tests -q
 python -m compileall app adapters mcp-server/agent_search_mcp scripts sdk -q
+python -m pip check
 docker compose -f docker-compose.yml config --quiet
 docker compose -f docker-compose.yml -f examples/compose.private.yml config --quiet
 docker build -t agent-search-api:test .
@@ -432,7 +434,7 @@ Environment variables (set in `docker-compose.yml` or `.env`):
 - Bearer auth is a simple local API gate, not a multi-user authorization system. Treat `AGENT_SEARCH_TOKEN` as a shared service token.
 - Rate limiting is in memory. It resets on restart and is per API process.
 - Query statistics use local SQLite with WAL and a bounded lock timeout. For high-volume multi-worker deployments, move query logging to an external database or telemetry backend.
-- The MCP package intentionally bounds its `mcp` dependency to the tested 1.27.x line. Upgrade deliberately and run the package/CI checks before publishing.
+- The MCP package supports `mcp>=1.27.2,<2.3.0`. CI tests both 1.27.2 and 2.2.0 in isolated environments, including real stdio discovery, successful invocation, and error semantics. Upgrade deliberately and run the package/CI checks before publishing.
 - Content extraction validates the starting URL and every redirect hop before fetching redirected content, but fetched third-party pages are still untrusted and are scrubbed before being returned.
 - Google Cache is unreliable because public cache availability changes frequently.
 - The Tor/private stack is intentionally slower than direct search.

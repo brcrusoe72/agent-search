@@ -6,6 +6,7 @@ import ipaddress
 import json
 import os
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
@@ -67,7 +68,6 @@ def make_server(
     allow_insecure_http: bool = False,
 ) -> Server:
     base_url = validate_transport(base_url, token, allow_insecure_http=allow_insecure_http)
-    server = Server("agent-search")
     timeout = httpx.Timeout(120, connect=10)
     headers = {"Authorization": f"Bearer {token}"} if token else None
 
@@ -78,8 +78,7 @@ def make_server(
                 params[name] = value
         return params
 
-    @server.list_tools()
-    async def list_tools() -> list[Tool]:
+    async def _list_tools() -> list[Tool]:
         return [
             Tool(
                 name="health",
@@ -263,8 +262,10 @@ def make_server(
             ),
         ]
 
-    @server.call_tool()
-    async def call_tool(name: str, arguments: dict) -> list[TextContent] | CallToolResult:
+    async def _call_tool(
+        name: str, arguments: dict[str, Any] | None
+    ) -> list[TextContent] | CallToolResult:
+        arguments = arguments or {}
         def _error(message: str) -> CallToolResult:
             return CallToolResult(
                 content=[TextContent(type="text", text=message)],
@@ -370,7 +371,31 @@ def make_server(
         except Exception as e:
             return _error(f"{type(e).__name__}: {e}")
 
-    return server
+    if hasattr(Server, "list_tools"):
+        # MCP 1.x uses decorator-based handler registration.
+        server = Server("agent-search")
+        server.list_tools()(_list_tools)
+        server.call_tool()(_call_tool)
+        return server
+
+    # MCP 2.x requires typed constructor callbacks. Preserve the error flag
+    # from the security baseline instead of wrapping errors as successful text.
+    from mcp.types import CallToolRequestParams, ListToolsResult
+
+    async def _list_tools_v2(_context: Any, _params: Any) -> ListToolsResult:
+        return ListToolsResult(tools=await _list_tools())
+
+    async def _call_tool_v2(
+        _context: Any, params: CallToolRequestParams
+    ) -> CallToolResult:
+        result = await _call_tool(params.name, params.arguments)
+        return result if isinstance(result, CallToolResult) else CallToolResult(content=result)
+
+    return Server(
+        "agent-search",
+        on_list_tools=_list_tools_v2,
+        on_call_tool=_call_tool_v2,
+    )
 
 
 async def main(

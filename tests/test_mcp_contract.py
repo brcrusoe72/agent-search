@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import runpy
 import sys
 from pathlib import Path
 
@@ -18,9 +19,9 @@ def _server_module():
     return server
 
 
-def test_mcp_dependency_remains_on_verified_127_line() -> None:
+def test_mcp_dependency_matches_verified_boundaries() -> None:
     pyproject = (MCP_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert '"mcp>=1.27.2,<1.28.0"' in pyproject
+    assert '"mcp>=1.27.2,<2.3.0"' in pyproject
 
 
 def test_mcp_transport_policy() -> None:
@@ -34,41 +35,10 @@ def test_mcp_transport_policy() -> None:
     ) == "http://search.example"
 
 
-def test_mcp_unknown_tool_is_protocol_error() -> None:
-    server_module = _server_module()
-    from mcp.types import CallToolRequest, CallToolRequestParams
-
-    server = server_module.make_server("http://localhost:3939")
-    handler = server.request_handlers[CallToolRequest]
-    request = CallToolRequest(params=CallToolRequestParams(name="unknown", arguments={}))
-    response = asyncio.run(handler(request)).root
-
-    assert response.isError is True
-    assert response.content
-
-
-def test_mcp_connection_failure_is_protocol_error(monkeypatch) -> None:
-    server_module = _server_module()
-    from mcp.types import CallToolRequest, CallToolRequestParams
-
-    class FailedClient:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            return None
-
-        async def get(self, *args, **kwargs):
-            raise server_module.httpx.ConnectError("offline")
-
-    monkeypatch.setattr(server_module.httpx, "AsyncClient", lambda **kwargs: FailedClient())
-    server = server_module.make_server("http://localhost:3939")
-    handler = server.request_handlers[CallToolRequest]
-    request = CallToolRequest(params=CallToolRequestParams(name="health", arguments={}))
-    response = asyncio.run(handler(request)).root
-
-    assert response.isError is True
-    assert "Cannot connect" in response.content[0].text
+def test_mcp_protocol_success_and_errors() -> None:
+    _server_module()
+    smoke = runpy.run_path(str(MCP_ROOT / "tests" / "protocol_smoke.py"))
+    asyncio.run(asyncio.wait_for(smoke["verify_protocol"](), timeout=30))
 
 
 def test_mcp_source_does_not_offer_cwd_token_file() -> None:
