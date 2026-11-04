@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import asyncio
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -11,6 +12,8 @@ from typing import Any
 from urllib.parse import quote, urljoin
 
 import httpx
+
+from app.scholarly import arxiv_query
 
 
 DEFAULT_PROVIDER_HEADERS = {
@@ -72,6 +75,17 @@ class SearchProvider:
             "content": snippet_text,
             "engines": [self.engine_name],
         }
+
+    def _paper(self, title: object, url: object, snippet: object = "", *,
+               authors: list | None = None, doi: object = "", arxiv_id: object = "",
+               citations: object = 0) -> dict:
+        row = self._result(title, url, snippet)
+        names = [_safe_text(name) for name in (authors or []) if name]
+        row.update(authors=names, doi=_safe_text(doi), arxiv_id=_safe_text(arxiv_id),
+                   citation_count=citations if isinstance(citations, int) else 0)
+        if names:
+            row["content"] = f"Authors: {', '.join(names)}. {row['content']}"[:2000]
+        return row
 
 
 def provider_by_name(name: str) -> SearchProvider:
@@ -459,7 +473,7 @@ class ArxivProvider(SearchProvider):
         resp = await client.get(
             "https://export.arxiv.org/api/query",
             params={
-                "search_query": f"all:{query}",
+                **arxiv_query(query),
                 "start": 0,
                 "max_results": min(max(count * 3, 1), 50),
                 "sortBy": "relevance",
@@ -471,12 +485,30 @@ class ArxivProvider(SearchProvider):
         resp.raise_for_status()
         root = ET.fromstring(resp.text)
         ns = {"atom": "http://www.w3.org/2005/Atom"}
+        if not root.findall("atom:entry", ns) and "id_list" not in arxiv_query(query):
+            # Keep exact title discovery separate from broader keyword retrieval:
+            # OR-combining them can bury the exact paper before local ranking.
+            # arXiv asks clients to leave at least three seconds between calls.
+            await asyncio.sleep(3)
+            resp = await client.get(
+                "https://export.arxiv.org/api/query",
+                params={**arxiv_query(query, title_only=False), "start": 0,
+                        "max_results": min(max(count * 3, 1), 50),
+                        "sortBy": "relevance", "sortOrder": "descending"},
+                headers={**DEFAULT_PROVIDER_HEADERS, "Accept": "application/atom+xml"},
+                timeout=self.timeout,
+            )
+            resp.raise_for_status()
+            root = ET.fromstring(resp.text)
         results: list[dict] = []
         for entry in root.findall("atom:entry", ns)[: count * 3]:
             title = entry.findtext("atom:title", default="", namespaces=ns)
             url = entry.findtext("atom:id", default="", namespaces=ns)
             summary = entry.findtext("atom:summary", default="", namespaces=ns)
-            results.append(self._result(title, url, summary))
+            authors = [author.findtext("atom:name", default="", namespaces=ns)
+                       for author in entry.findall("atom:author", ns)]
+            doi = entry.findtext("{http://arxiv.org/schemas/atom}doi", default="")
+            results.append(self._paper(title, url, summary, authors=authors, doi=doi))
         return results
 
 
@@ -487,7 +519,7 @@ class CrossrefProvider(SearchProvider):
     async def _search(self, client: httpx.AsyncClient, query: str, count: int) -> list[dict]:
         resp = await client.get(
             "https://api.crossref.org/works",
-            params={"query": query, "rows": min(max(count * 3, 1), 50)},
+            params={"query.bibliographic": query, "rows": min(max(count * 3, 1), 50)},
             headers=DEFAULT_PROVIDER_HEADERS,
             timeout=self.timeout,
         )
@@ -503,7 +535,10 @@ class CrossrefProvider(SearchProvider):
             container = _first(item.get("container-title")) or ""
             abstract = item.get("abstract") or ""
             snippet = f"{container}. {abstract}".strip(". ")
-            results.append(self._result(title, url, snippet))
+            authors = [" ".join(str(author.get(k) or "") for k in ("given", "family")).strip()
+                       for author in (item.get("author") or []) if isinstance(author, dict)]
+            results.append(self._paper(title, url, snippet, authors=authors, doi=item.get("DOI"),
+                                       citations=item.get("is-referenced-by-count")))
         return results
 
 
@@ -528,7 +563,11 @@ class OpenAlexProvider(SearchProvider):
             if not url:
                 continue
             snippet = _abstract_from_openalex_index(item.get("abstract_inverted_index"))
-            results.append(self._result(item.get("display_name") or item.get("title"), url, snippet))
+            authors = [author["author"].get("display_name")
+                       for author in (item.get("authorships") or [])
+                       if isinstance(author, dict) and isinstance(author.get("author"), dict)]
+            results.append(self._paper(item.get("display_name") or item.get("title"), url, snippet,
+                                       authors=authors, doi=item.get("doi"), citations=item.get("cited_by_count")))
         return results
 
 
@@ -554,14 +593,16 @@ class SemanticScholarProvider(SearchProvider):
                 continue
             external = item.get("externalIds") if isinstance(item.get("externalIds"), dict) else {}
             open_pdf = item.get("openAccessPdf") if isinstance(item.get("openAccessPdf"), dict) else {}
-            url = item.get("url") or open_pdf.get("url") or _doi_url(external.get("DOI"))
+            url = _doi_url(external.get("DOI")) or item.get("url") or open_pdf.get("url")
             if not url:
                 continue
             citations = item.get("citationCount")
             snippet = item.get("abstract") or ""
             if isinstance(citations, int):
                 snippet = f"{snippet} Citations: {citations}".strip()
-            results.append(self._result(item.get("title"), url, snippet))
+            authors = [author.get("name") for author in (item.get("authors") or []) if isinstance(author, dict)]
+            results.append(self._paper(item.get("title"), url, snippet, authors=authors,
+                                       doi=external.get("DOI"), arxiv_id=external.get("ArXiv"), citations=citations))
         return results
 
 

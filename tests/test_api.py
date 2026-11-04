@@ -709,8 +709,8 @@ def test_search_strategy_academic_uses_direct_providers(monkeypatch: pytest.Monk
     assert response.status_code == 200
     data = response.json()
     assert fake.search_params == []
-    assert fake.arxiv_params[0]["search_query"] == "all:transformer attention"
-    assert fake.crossref_params[0]["query"] == "transformer attention"
+    assert fake.arxiv_params[0]["search_query"] == 'ti:"transformer attention"'
+    assert fake.crossref_params[0]["query.bibliographic"] == "transformer attention"
     assert fake.openalex_params[0]["search"] == "transformer attention"
     assert fake.semantic_scholar_params[0]["query"] == "transformer attention"
     assert [attempt["engines"] for attempt in data["meta"]["engine_attempts"]] == [
