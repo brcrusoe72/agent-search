@@ -152,7 +152,15 @@ def deduplicate_with_scoring(raw_results: list[dict], *, query: str | None = Non
     Scores are ranking heuristics, not probabilities of correctness. Operators
     and common connecting words are excluded from positive query coverage.
     """
-    positive_query = re.sub(r'(?<!\S)(?:\w+:|-)\S+', ' ', query or '')
+    positive_words = []
+    for word in (query or '').split():
+        operator, separator, _ = word.partition(':')
+        if word.startswith('-') or (
+            separator and operator and all(char.isalnum() or char == '_' for char in operator)
+        ):
+            continue
+        positive_words.append(word)
+    positive_query = ' '.join(positive_words)
     stop_words = {'a', 'an', 'the', 'and', 'or', 'of', 'to', 'in', 'for', 'on', 'with', 'is', 'are'}
     query_terms = set(re.findall(r'[^\W_]+', positive_query.casefold())) - stop_words
     seen: dict[str, dict] = {}
