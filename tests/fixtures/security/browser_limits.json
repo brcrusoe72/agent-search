@@ -1,0 +1,10 @@
+{
+  "max_concurrent": 2,
+  "requests": [
+    {"url": "https://example.com/one", "safe": true},
+    {"url": "https://example.com/two", "safe": true},
+    {"url": "https://example.com/three", "safe": true},
+    {"url": "http://127.0.0.1/admin", "safe": false}
+  ],
+  "hostile_navigation": "http://10.0.0.1/internal"
+}

@@ -1,6 +1,6 @@
 # AgentSearch
 
-Self-hosted search API for AI agents. 17 endpoints. Layered content extraction with optional browser rendering. Optional Tor-anonymized stack. No third-party search API keys, no per-query fees, no vendor lock-in. Optional local bearer auth is supported.
+Self-hosted search API for AI agents. Layered content extraction with isolated browser rendering. Optional Tor-anonymized stack. No third-party search API keys, no per-query fees, no vendor lock-in. Optional local bearer auth is supported.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![PyPI](https://img.shields.io/pypi/v/agentsearch-client)](https://pypi.org/project/agentsearch-client/)
 
@@ -14,7 +14,7 @@ curl "http://localhost:3939/search?q=distributed+consensus+algorithms"
 
 You now have a deduplicated, multi-engine search API running on `:3939`.
 
-If you enable auth, pass the token on all non-health endpoints:
+If you enable auth, pass the token on all endpoints except `/health`, `/live`, and `/ready`:
 
 ```bash
 export AGENT_SEARCH_TOKEN="change-me"
@@ -33,6 +33,8 @@ cd agent-search
 
 Native mode requires Python 3.11+ and a reachable SearXNG instance with JSON output enabled. It stores AgentSearch state in `./data`. See [Native Install](docs/native-install.md).
 
+Existing Docker installations: follow [the upgrade procedure](docs/upgrading.md) before switching from a root-run image.
+
 ## Verify
 
 Run the self-contained test suite:
@@ -40,11 +42,17 @@ Run the self-contained test suite:
 ```bash
 python -m venv .venv
 . .venv/bin/activate
-pip install -r requirements.txt pytest requests
-pip install -e sdk -e mcp-server
+pip install -r requirements.txt pytest requests build wheel "setuptools>=68"
+pip install -e sdk
+# MCP has a separate Pydantic requirement; keep it isolated.
+python -m venv .venv-mcp
+.venv-mcp/bin/python -m pip install -e mcp-server pytest
+.venv-mcp/bin/python -m pytest tests/test_mcp_contract.py -q
+.venv-mcp/bin/python -m pip check
 ./scripts/prepare-searxng.sh
 pytest tests -q
 python -m compileall app adapters mcp-server/agent_search_mcp scripts sdk -q
+python -m pip check
 docker compose -f docker-compose.yml config --quiet
 docker compose -f docker-compose.yml -f examples/compose.private.yml config --quiet
 docker build -t agent-search-api:test .
@@ -112,35 +120,15 @@ SearXNG finds pages. AgentSearch fetches and reads them, scores and deduplicates
 | **Adaptive (failure analysis)** | ✅ (evolver) | ❌ | ❌ | ❌ | ❌ |
 | **Tor anonymization** | Optional | ❌ | ❌ | ❌ | Manual |
 
-## Lighter-weight siblings
+## Related projects
 
-AgentSearch is the full self-hosted stack. If you only need one slice of it —
-keyless, no server, installable from source — these carve a single job out of it
-and do just that one thing:
+For narrower tasks, these separate projects in the same GitHub account may be useful:
 
-- **[scholar](https://github.com/brcrusoe72/scholar-cli)** — scholarly search over OpenAlex: peer-reviewed sources and citation graphs, where credibility is data (venue, citations, retraction flags) rather than vibes. *(52% primary-source precision on a 20-question benchmark.)*
-- **[agent-read](https://github.com/brcrusoe72/agent-read)** — this repo's extraction chain as a standalone `URL → clean text` CLI: the same escalation (direct → readability → UA-rotation → Wayback → PDF), no Docker, no SearXNG. *(85% usable text on 40 hard URLs, vs. 48% for a naive fetch.)*
-- **[agent-web](https://github.com/brcrusoe72/agent-web)** — for pages that need *interaction* rather than a fetch: drive a real browser and act on a compact accessibility snapshot with element refs. *(Snapshot ≈ 16× smaller than raw HTML.)*
+- **[scholar](https://github.com/brcrusoe72/scholar-cli)**: scholarly search.
+- **[agent-read](https://github.com/brcrusoe72/agent-read)**: URL-to-text extraction.
+- **[agent-web](https://github.com/brcrusoe72/agent-web)**: browser interaction.
 
-With Python 3.10+ and Git installed, install directly from the source repositories
-using `uv` (these commands do not depend on a PyPI release):
-
-```bash
-uv tool install git+https://github.com/brcrusoe72/scholar-cli.git
-uv tool install git+https://github.com/brcrusoe72/agent-read.git
-uv tool install git+https://github.com/brcrusoe72/agent-web.git
-```
-
-Alternatively, inside an activated Python virtual environment:
-
-```bash
-python -m pip install git+https://github.com/brcrusoe72/scholar-cli.git
-python -m pip install git+https://github.com/brcrusoe72/agent-read.git
-python -m pip install git+https://github.com/brcrusoe72/agent-web.git
-```
-
-The commands are `scholar`, `agent-read`, and `agent-web`. See each repository's
-README for optional features and browser setup.
+See each repository for installation instructions and documentation.
 
 ## Endpoints
 
@@ -180,7 +168,7 @@ The extraction chain escalates through strategies until one succeeds:
 9. PDF extraction (pdfplumber)
 10. YouTube transcript (yt-dlp)
 
-Every request gets SSRF protection, prompt injection detection, paywall detection, and content length caps automatically. The browser renderer uses an ephemeral context, blocks high-cost resource types by default, and reports CAPTCHA/challenge pages instead of trying to bypass them. It is for rendering target pages, not for scraping blocked search-result pages.
+Every request gets fail-closed SSRF protection, prompt injection detection, paywall detection, and streamed content limits automatically. Browser rendering runs as a dedicated non-root service on an internal-only network, uses an ephemeral sandboxed context, and can reach targets only through the validating fetch proxy. It reports CAPTCHA/challenge pages instead of trying to bypass them.
 
 ### Adaptation
 
@@ -188,13 +176,15 @@ Every request gets SSRF protection, prompt injection detection, paywall detectio
 |---|---|---|
 | `/adapt/report` | POST | Report a fetch failure for a URL |
 | `/adapt/stats` | GET | View adaptation metrics and failure patterns |
-| `/adapt/evolve` | POST | Trigger an adaptation cycle — analyzes failures, tunes config |
+| `/adapt/evolve` | POST | Analyze failures and return recommendations (read-only) |
 
 ### Infrastructure
 
 | Endpoint | Method | What it does |
 |---|---|---|
 | `/health` | GET | Health check (API + SearXNG status) |
+| `/live` | GET | Cheap process liveness check; never calls upstream search |
+| `/ready` | GET | Bounded SearXNG readiness check; returns 503 when unusable |
 | `/engines` | GET | List available search engines and their status |
 | `/providers/health` | GET | Summarize provider health from recorded live attempts |
 | `/providers/stats` | GET | Rolling provider/SearXNG attempt telemetry |
@@ -299,8 +289,10 @@ print(f"{pages.successful}/{pages.total} succeeded")
 ```
 
 For authenticated instances, pass `token=...` or use `AGENT_SEARCH_TOKEN`,
-`AGENTSEARCH_TOKEN`, `credentials/agent-search-token.txt`, or
-`~/.config/agent-search/token`.
+`AGENTSEARCH_TOKEN`, `~/.openclaw/workspace/credentials/agent-search-token.txt`,
+or `~/.config/agent-search/token`. CWD credential files are never loaded.
+Remote bearer-token connections require HTTPS unless the SDK caller explicitly
+sets `allow_insecure_http=True`.
 
 ### LangChain tool
 
@@ -452,7 +444,7 @@ Environment variables (set in `docker-compose.yml` or `.env`):
 - Bearer auth is a simple local API gate, not a multi-user authorization system. Treat `AGENT_SEARCH_TOKEN` as a shared service token.
 - Rate limiting is in memory. It resets on restart and is per API process.
 - Query statistics use local SQLite with WAL and a bounded lock timeout. For high-volume multi-worker deployments, move query logging to an external database or telemetry backend.
-- The MCP package intentionally bounds its `mcp` dependency to the tested 1.27.x line. Upgrade deliberately and run the package/CI checks before publishing.
+- The MCP package supports `mcp>=1.27.2,<2.3.0`. CI tests both 1.27.2 and 2.2.0 in isolated environments, including real stdio discovery, successful invocation, and error semantics. Upgrade deliberately and run the package/CI checks before publishing.
 - Content extraction validates the starting URL and every redirect hop before fetching redirected content, but fetched third-party pages are still untrusted and are scrubbed before being returned.
 - Google Cache is unreliable because public cache availability changes frequently.
 - The Tor/private stack is intentionally slower than direct search.
