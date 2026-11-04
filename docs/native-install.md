@@ -129,14 +129,16 @@ For safer local token storage, see [Secret Handling](secrets.md).
 - Docker mode still works unchanged because the container working directory is `/app`, so the default relative `data/` path maps to `/app/data`.
 - The private Tor stack still requires Docker Compose.
 
-### Adapter outbound connections
+### Outbound connections
 
-Native adapter fetching validates DNS at connection time and connects only to
+Native API, PDF, and adapter fetching validates DNS at connection time and connects only to
 validated public addresses. Ambient HTTP(S)_PROXY variables do not override
-this protection. To route adapter traffic through a trusted validating gateway,
+this protection. To route this traffic through a trusted validating gateway,
 set `FETCH_PROXY_URL` explicitly. Compose supplies its bundled validating proxy
 for both direct and Tor stacks. A configured proxy failure never falls back to
 a direct connection. An arbitrary proxy does not supply these guarantees.
+The API connects directly to the configured SearXNG origin on the internal
+network, even when `FETCH_PROXY_URL` is set.
 
 The direct worker network uses `172.29.0.0/24` (RFC1918). Deployments of the
 unreleased repair using `172.32.0.0/24` must recreate that network; it is not

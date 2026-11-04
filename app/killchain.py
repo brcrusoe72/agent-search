@@ -35,6 +35,7 @@ import os
 import re
 import socket
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,6 +48,7 @@ from bs4 import BeautifulSoup
 from app.content_cache import ContentCache
 from app.fetch_security import (
     DEFAULT_MAX_RESPONSE_BYTES,
+    SafeSyncHTTPTransport,
     UnsafeURLError,
     safe_httpx_get,
     validate_public_url,
@@ -624,66 +626,36 @@ PDF_PARSE_TIMEOUT = 60  # seconds
 def strategy_pdf_sync(url: str) -> Optional[str]:
     """Strategy 8: PDF extraction with size limits and subprocess isolation."""
     try:
-        import requests as req
-
-        # Stream download with size check
+        # Use the same explicit validating gateway as adapters. Native fetches
+        # pin validated DNS answers and ignore ambient proxy configuration.
+        proxy = os.getenv("FETCH_PROXY_URL")
+        options = {"proxy": proxy} if proxy else {
+            "transport": SafeSyncHTTPTransport(trust_env=False)
+        }
         current_url = url
-        r = None
-        for _ in range(MAX_REDIRECTS + 1):
-            if not is_safe_url(current_url, verbose=True):
-                raise UnsafeRedirectError(f"Unsafe URL blocked: {current_url}")
-
-            r = req.get(
-                current_url,
-                timeout=30,
-                headers={"User-Agent": USER_AGENTS[0]},
-                stream=True,
-                allow_redirects=False,
-            )
-            if not 300 <= r.status_code < 400:
-                break
-
-            location = r.headers.get("Location")
-            r.close()
-            if not location:
-                break
-
-            next_url = urljoin(current_url, location)
-            if not is_safe_url(next_url, verbose=True):
-                raise UnsafeRedirectError(f"Unsafe redirect blocked: {current_url} -> {next_url}")
-            current_url = next_url
-        else:
-            raise UnsafeRedirectError(f"Too many redirects for URL: {url}")
-
-        assert r is not None
-        r.raise_for_status()
-
-        # Check Content-Length header first
-        content_length = r.headers.get("Content-Length")
-        if content_length and int(content_length) > MAX_PDF_BYTES:
-            logger.warning(
-                "PDF too large (%s bytes): %s",
-                int(content_length),
-                _safe_log_value(url),
-            )
-            return None
-
-        # Download with running size check
-        chunks = []
-        total = 0
-        for chunk in r.iter_content(chunk_size=65536):
-            total += len(chunk)
-            if total > MAX_PDF_BYTES:
-                logger.warning(
-                    "PDF exceeded %s bytes during download: %s",
-                    MAX_PDF_BYTES,
-                    _safe_log_value(url),
-                )
-                return None
-            chunks.append(chunk)
-
-        pdf_bytes = b"".join(chunks)
-        del chunks
+        pdf_bytes = bytearray()
+        with httpx.Client(trust_env=False, timeout=30, **options) as client:
+            for hop in range(MAX_REDIRECTS + 1):
+                if not is_safe_url(current_url, verbose=True):
+                    raise UnsafeRedirectError(f"Unsafe URL blocked: {current_url}")
+                with client.stream(
+                    "GET", current_url, headers={"User-Agent": USER_AGENTS[0]},
+                    follow_redirects=False,
+                ) as response:
+                    if response.has_redirect_location:
+                        if hop == MAX_REDIRECTS:
+                            raise UnsafeRedirectError("Too many PDF redirects")
+                        current_url = urljoin(str(response.url), response.headers["location"])
+                        continue
+                    response.raise_for_status()
+                    length = response.headers.get("content-length")
+                    if length is not None and not 0 <= int(length) <= MAX_PDF_BYTES:
+                        return None
+                    for chunk in response.iter_bytes():
+                        if len(pdf_bytes) + len(chunk) > MAX_PDF_BYTES:
+                            return None
+                        pdf_bytes.extend(chunk)
+                    break
 
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
             tmp.write(pdf_bytes)
@@ -700,7 +672,7 @@ def strategy_pdf_sync(url: str) -> Optional[str]:
         )
         try:
             result = subprocess.run(
-                ["python3", "-c", extract_script, tmp_path],
+                [sys.executable, "-c", extract_script, tmp_path],
                 capture_output=True, text=True,
                 timeout=PDF_PARSE_TIMEOUT,
             )
