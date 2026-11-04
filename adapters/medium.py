@@ -81,7 +81,7 @@ def _extract_article(html: str) -> str | None:
     return None
 
 
-def fetch_content(url: str) -> str | None:
+def fetch_content(url: str) -> dict | None:
     """Try multiple strategies to extract Medium article content."""
     headers = {
         "User-Agent": USER_AGENT,
@@ -97,7 +97,7 @@ def fetch_content(url: str) -> str | None:
         if r.status_code == 200:
             text = _extract_article(r.text)
             if text:
-                return text
+                return {"content": text, "fetched_url": str(r.url or freedium_url)}
     except Exception as exc:
         logger.debug("Freedium strategy failed: %s", exc)
 
@@ -108,7 +108,7 @@ def fetch_content(url: str) -> str | None:
         if r.status_code == 200:
             text = _extract_article(r.text)
             if text:
-                return text
+                return {"content": text, "fetched_url": str(r.url or cache_url)}
     except Exception as exc:
         logger.debug("Google cache strategy failed: %s", exc)
 
@@ -125,7 +125,7 @@ def fetch_content(url: str) -> str | None:
                 if r2.status_code == 200:
                     text = _extract_article(r2.text)
                     if text:
-                        return text
+                        return {"content": text, "fetched_url": str(r2.url or wb_url)}
     except Exception as exc:
         logger.debug("Archive.org strategy failed: %s", exc)
 
@@ -139,7 +139,7 @@ def fetch_content(url: str) -> str | None:
         if r.status_code == 200:
             text = _extract_article(r.text)
             if text:
-                return text
+                return {"content": text, "fetched_url": str(r.url or url)}
     except Exception as exc:
         logger.debug("Googlebot strategy failed: %s", exc)
 

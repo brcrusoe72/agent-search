@@ -256,18 +256,15 @@ def get_sources(query: str) -> List[Dict[str, str]]:
 
 def get_domain_score(url: str) -> float:
     """Get quality score for a URL's domain."""
-    from urllib.parse import urlparse
+    from app.url_utils import hostname_matches, normalize_hostname
     try:
-        domain = urlparse(url).netloc.lower()
-        # Strip www.
-        if domain.startswith("www."):
-            domain = domain[4:]
+        domain = normalize_hostname(url)
         # Check exact match first
         if domain in DOMAIN_QUALITY:
             return DOMAIN_QUALITY[domain]
-        # Check if any key is a substring
+        # R10: match true subdomains, never attacker-controlled substrings.
         for key, score in DOMAIN_QUALITY.items():
-            if key in domain:
+            if hostname_matches(domain, key):
                 return score
         # Unknown domain: neutral score
         return 0.5

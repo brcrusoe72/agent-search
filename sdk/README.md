@@ -28,7 +28,7 @@ for r in results.results:
 
 ## API Reference
 
-### `AgentSearch(base_url, timeout=30.0, token=None)`
+### `AgentSearch(base_url, timeout=30.0, token=None, allow_insecure_http=False)`
 
 Create a client instance. If `httpx` is installed, it uses connection pooling automatically.
 
@@ -43,8 +43,10 @@ client = AgentSearch("http://localhost:3939", token="change-me")
 ```
 
 If `token` is omitted, the client tries `AGENT_SEARCH_TOKEN`,
-`AGENTSEARCH_TOKEN`, `credentials/agent-search-token.txt`, and
-`~/.config/agent-search/token`.
+`AGENTSEARCH_TOKEN`, `~/.openclaw/workspace/credentials/agent-search-token.txt`,
+and `~/.config/agent-search/token`. It does not load credentials from the
+current working directory. Bearer tokens require HTTPS for non-loopback hosts;
+legacy plaintext deployments must explicitly set `allow_insecure_http=True`.
 
 Supports context manager:
 

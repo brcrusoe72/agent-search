@@ -241,8 +241,9 @@ class Evolver:
                 if f.stem != "__init__"
             ]
 
-        # Auto-apply safe recommendations
-        actions_taken = self.auto_apply(recommendations)
+        # R1-R3: analysis is deliberately read-only. Client feedback may inform
+        # recommendations, but it can never change the runtime blocklist.
+        actions_taken: list[str] = []
 
         return {
             "analyzed_at": time.time(),
@@ -258,39 +259,6 @@ class Evolver:
             "existing_adapters": existing_adapters,
             "actions_taken": actions_taken,
         }
-
-    def auto_apply(self, recommendations: list[dict]) -> list[str]:
-        """Auto-apply safe recommendations. Returns list of actions taken."""
-        actions = []
-
-        for rec in recommendations:
-            if rec["type"] == "block_domains" and rec["priority"] == "high":
-                # Auto-block domains with 0% success rate
-                existing = set()
-                try:
-                    if DYNAMIC_BLOCKLIST_PATH.exists():
-                        existing = {
-                            line.strip().lower()
-                            for line in DYNAMIC_BLOCKLIST_PATH.read_text().splitlines()
-                            if line.strip() and not line.startswith("#")
-                        }
-                except Exception as exc:
-                    logger.debug("Failed to read dynamic blocklist: %s", exc)
-
-                new_domains = [d for d in rec["domains"] if d.lower() not in existing]
-                if new_domains:
-                    try:
-                        with open(DYNAMIC_BLOCKLIST_PATH, "a") as f:
-                            f.write(f"# Auto-blocked {time.strftime('%Y-%m-%d %H:%M')}\n")
-                            for d in new_domains:
-                                f.write(f"{d}\n")
-                        actions.append(f"Blocked {len(new_domains)} domains: {', '.join(new_domains)}")
-                        safe_domains = [_safe_log_value(domain) for domain in new_domains]
-                        logger.info("Evolver auto-blocked domains: %s", safe_domains)
-                    except Exception as e:
-                        logger.warning("Failed to write dynamic blocklist: %s", e)
-
-        return actions
 
     def _health_grade(self, stats: dict) -> str:
         """Grade overall fetch health A-F."""
