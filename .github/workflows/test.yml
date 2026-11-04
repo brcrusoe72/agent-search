@@ -11,7 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
 
@@ -72,4 +72,7 @@ jobs:
           docker build -t agent-search-api:test .
           docker build -t agent-search-mcp:test mcp-server
           docker build -t agent-search-tor:test examples/torproxy
+          docker build -f Dockerfile.browser -t agent-search-browser:test .
 
+      - name: Verify sandboxed browser startup
+        run: python scripts/check_browser_sandbox.py

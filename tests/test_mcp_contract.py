@@ -44,4 +44,3 @@ def test_mcp_protocol_success_and_errors() -> None:
 def test_mcp_source_does_not_offer_cwd_token_file() -> None:
     source = (MCP_ROOT / "agent_search_mcp" / "server.py").read_text(encoding="utf-8")
     assert 'Path.cwd()' not in source
-

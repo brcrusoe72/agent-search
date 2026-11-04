@@ -109,23 +109,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global http_client, content_cache, evolver
     created_http_client = http_client is None
     if http_client is None:
-        proxy_configured = any(
-            os.getenv(name)
-            for name in ("ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy")
+        searxng = urlparse(SEARXNG_URL)
+        proxy = os.getenv("FETCH_PROXY_URL") or None
+        # Ambient proxy/NO_PROXY settings must never disable DNS pinning.
+        # Only the explicitly configured validating gateway may proxy fetches.
+        # The configured SearXNG origin remains reachable on the internal net.
+        transport = SafeAsyncHTTPTransport(
+            allowed_hostnames=[searxng.hostname or ""],
+            limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
+            trust_env=False,
         )
-        if proxy_configured:
-            # The private stack is fail-closed at the Docker network boundary
-            # and reaches external hosts only through its configured Tor proxy.
-            http_client = httpx.AsyncClient(timeout=30.0)
-        else:
-            searxng_host = urlparse(SEARXNG_URL).hostname or ""
-            http_client = httpx.AsyncClient(
-                timeout=30.0,
-                transport=SafeAsyncHTTPTransport(
-                    allowed_hostnames=[searxng_host],
-                    limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
-                ),
-            )
+        http_client = httpx.AsyncClient(
+            timeout=30.0, trust_env=False, proxy=proxy, transport=transport,
+            mounts={f"{searxng.scheme}://{searxng.netloc}": transport} if proxy else None,
+        )
     if content_cache is None:
         content_cache = ContentCache()
     if evolver is None:

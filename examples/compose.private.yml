@@ -102,6 +102,7 @@ services:
       args:
         PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python@sha256:9e01bf1ae5db7649a236da7be1e94ffbbbdd7a93f867dd0d8d5720d9e1f89fab}
     container_name: agent-search-browser-private
+    init: true
     environment:
       - BROWSER_LOCAL_RENDER_ENABLED=1
       - BROWSER_PROXY_URL=http://fetch-proxy-private:8888
@@ -127,7 +128,7 @@ services:
     security_opt:
       - no-new-privileges:true
       - seccomp=./examples/chromium-seccomp.json
-    pids_limit: 256
+    pids_limit: 512
     mem_limit: 768m
     cpus: 1.00
     healthcheck:

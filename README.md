@@ -466,4 +466,3 @@ Issues and PRs welcome. If you're building an agent that needs search, this is f
 ## License
 
 The root AgentSearch API, SDK, Docker stack, and docs are MIT licensed. The MCP server under `mcp-server/` is AGPL-3.0 licensed; see [mcp-server/LICENSE](mcp-server/LICENSE).
-
