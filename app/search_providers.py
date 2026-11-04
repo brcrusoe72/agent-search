@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from html import unescape
 from typing import Any
-from urllib.parse import quote, urljoin
+from urllib.parse import quote, urljoin, urlparse
 
 import httpx
 
@@ -17,6 +17,21 @@ DEFAULT_PROVIDER_HEADERS = {
     "Accept": "application/json, application/atom+xml, application/xml;q=0.9, */*;q=0.8",
     "User-Agent": "AgentSearch/2.0 (+https://github.com/brcrusoe72/agent-search)",
 }
+
+# You.com API calls carry the integration token appended to the product
+# User-Agent; on the keyless tier the header is the attribution signal.
+_YOUCOM_USER_AGENT = (
+    "AgentSearch/2.0 (+https://github.com/brcrusoe72/agent-search) "
+    "youdotcom-integration/brcrusoe72-agent-search"
+)
+
+
+def _http_url(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    return parsed.scheme in ("http", "https") and bool(parsed.netloc)
 
 
 @dataclass
@@ -565,6 +580,46 @@ class SemanticScholarProvider(SearchProvider):
         return results
 
 
+class YoucomProvider(SearchProvider):
+    """You.com Agents API — keyless free tier, no API key required."""
+
+    name = "youcom"
+    engine_name = "youcom"
+
+    async def _search(self, client: httpx.AsyncClient, query: str, count: int) -> list[dict]:
+        # MINIMAL: the free tier allows 100 searches/day per IP and is capped
+        # at 20 results per call here; if higher volume is ever needed the
+        # upgrade path is a keyed endpoint behind an explicit opt-in config.
+        max_results = min(max(count * 3, 1), 20)
+        resp = await client.get(
+            "https://api.you.com/v1/agents/search",
+            params={"query": query, "max_results": max_results},
+            headers={**DEFAULT_PROVIDER_HEADERS, "User-Agent": _YOUCOM_USER_AGENT},
+            timeout=self.timeout,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        raw = data.get("results")
+        # The free Agents API nests results under "web"; tolerate a flat array
+        # as well so a response-shape change degrades gracefully.
+        items = raw if isinstance(raw, list) else _json_items(data, "results", "web")
+        results: list[dict] = []
+        for item in items[: count * 3]:
+            if not isinstance(item, dict):
+                continue
+            url = _safe_text(item.get("url"))
+            if not _http_url(url):
+                continue
+            snippets = item.get("snippets")
+            snippet = (
+                " ".join(part for part in snippets if isinstance(part, str))
+                if isinstance(snippets, list)
+                else _safe_text(item.get("description"))
+            )
+            results.append(self._result(item.get("title"), url, snippet))
+        return results
+
+
 PROVIDERS: dict[str, SearchProvider] = {
     "mdn": MDNProvider(),
     "github": GitHubProvider(),
@@ -578,4 +633,5 @@ PROVIDERS: dict[str, SearchProvider] = {
     "crossref": CrossrefProvider(),
     "openalex": OpenAlexProvider(),
     "semantic_scholar": SemanticScholarProvider(),
+    "youcom": YoucomProvider(),
 }

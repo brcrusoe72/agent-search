@@ -104,6 +104,8 @@ Because SearXNG is configured with `use_default_settings: true`, your live insta
 
 Strategy modes can also use direct no-key providers for vertical search. These do not require paid search APIs: GitHub repository search, MDN search, Docker Hub search, PyPI package metadata, Wikipedia, Wikidata, Hacker News, arXiv, Crossref, OpenAlex, and Semantic Scholar are called directly when a mode selects them. SearXNG remains the broad-web provider for Google/Bing/Brave/DuckDuckGo-style engines, but Google, Startpage, Yahoo, and Reddit are best-effort explicit sources rather than defaults because they are commonly blocked or empty.
 
++A `youcom` direct provider is registered alongside them: it calls You.com's keyless Agents API (free tier, 100 searches/day per IP, no key or account) so a hosted broad-web lane exists without SearXNG. It runs only when a strategy pack names it — no default mode includes it, so existing behavior is unchanged.
+
 ## Why not just use SearXNG directly?
 
 SearXNG finds pages. AgentSearch fetches and reads them, scores and deduplicates the results, caches them, scrubs prompt injections, detects paywalls, and falls back through several extraction strategies when the first one fails — in one API call. It also logs fetch outcomes so you can see which strategies and domains are actually working.
