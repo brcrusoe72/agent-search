@@ -12,15 +12,11 @@ Built on [AgentSearch](https://github.com/brcrusoe72/agent-search), which wraps 
 
 ## Why AgentSearch?
 
-| Feature | AgentSearch | Other search MCP servers |
-|---------|-------------|-------------------------|
-| Search engines | SearXNG-backed; run `/engines` for the live list | Usually 1-3 |
-| Content extraction | Kill chain plus browser-render extraction | Basic fetch or none |
-| Multi-query fusion | ✓ (generates 3-5 query variations) | ✗ |
-| News aggregation | News engines enabled in SearXNG | ✗ |
-| Job search | Dedicated job board search | ✗ |
-| Third-party search API keys required | None (self-hosted) | Often required |
-| Self-improving | Evolver tracks success rates by domain/strategy | ✗ |
+The server exposes AgentSearch's multi-engine search, query expansion, news,
+job search, and content extraction through MCP tools. Engine availability and
+extraction success depend on the running API and upstream sources. The API's
+evolver analyzes failures and returns recommendations; it does not automatically
+change the running system.
 
 ## Tools
 
@@ -49,22 +45,31 @@ Built on [AgentSearch](https://github.com/brcrusoe72/agent-search), which wraps 
 
 ## Install
 
+From the repository root, install the package in its own environment:
+
 ```bash
-pip install mcp httpx
+python3 -m venv .venv-mcp
+.venv-mcp/bin/python -m pip install -e ./mcp-server
+.venv-mcp/bin/agent-search-mcp --help
 ```
+
+This applies the declared `mcp>=1.27.2,<2.3.0` and HTTPX dependency bounds.
+Keep this environment separate from the API's dependencies. CI checks MCP
+1.27.2 and 2.2.0, including real stdio tool discovery and invocation.
+On Windows, use the executables under `.venv-mcp\Scripts\`.
 
 ## Usage
 
 ```bash
 # Default (AgentSearch at localhost:3939)
-python server.py
+.venv-mcp/bin/agent-search-mcp
 
 # Custom HTTPS endpoint
-python server.py --base-url https://search.example
+.venv-mcp/bin/agent-search-mcp --base-url https://search.example
 
 # Token-protected AgentSearch
-AGENT_SEARCH_TOKEN="change-me" python server.py
-python server.py --token "change-me"
+AGENT_SEARCH_TOKEN="change-me" .venv-mcp/bin/agent-search-mcp
+.venv-mcp/bin/agent-search-mcp --token "change-me"
 ```
 
 The MCP server loads a bearer token from `--token`, `AGENT_SEARCH_TOKEN`,
@@ -97,8 +102,7 @@ Add to your Claude Desktop config:
 {
   "mcpServers": {
     "agent-search": {
-      "command": "python",
-      "args": ["/path/to/server.py"]
+      "command": "/absolute/path/to/agent-search/.venv-mcp/bin/agent-search-mcp"
     }
   }
 }
@@ -112,8 +116,7 @@ Add to `.cursor/mcp.json` in your project:
 {
   "mcpServers": {
     "agent-search": {
-      "command": "python",
-      "args": ["/path/to/server.py"]
+      "command": "/absolute/path/to/agent-search/.venv-mcp/bin/agent-search-mcp"
     }
   }
 }
@@ -121,7 +124,7 @@ Add to `.cursor/mcp.json` in your project:
 
 ## Connect from any MCP client
 
-The server uses **stdio transport**. Launch `python server.py` as a subprocess and communicate via stdin/stdout using the MCP JSON-RPC protocol.
+The server uses **stdio transport**. Launch the installed `agent-search-mcp` executable as a subprocess and communicate via stdin/stdout using the MCP JSON-RPC protocol. Replace the example command paths with the absolute path to your environment; on Windows the executable is `.venv-mcp\Scripts\agent-search-mcp.exe`.
 
 ## Example Output
 
@@ -159,7 +162,7 @@ When extracting content from a URL, AgentSearch tries escalating strategies in s
 9. **PDF extraction** — for PDF URLs
 10. **YouTube transcript** — for YouTube URLs
 
-Each strategy is tried until one succeeds. The Evolver system tracks success rates by domain and strategy, learning which approaches work for which sites.
+Applicable strategies are tried until one succeeds. The Evolver system tracks outcomes by domain and strategy and recommends changes for operator review.
 
 The `browser_fetch` MCP tool exposes the browser renderer directly. It extracts rendered text and links from safe target pages, and reports CAPTCHA/challenge pages instead of trying to bypass them.
 
