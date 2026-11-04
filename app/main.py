@@ -347,8 +347,7 @@ def _provider_pack(provider: str, label: str | None = None) -> SearchStrategyPac
 
 SEARCH_STRATEGY_MODES: dict[str, tuple[SearchStrategyPack, ...]] = {
     "general": (
-        _searxng_pack("bing"),
-        _searxng_pack("duckduckgo", "brave"),
+        _searxng_pack("duckduckgo", "brave", "bing"),
         _provider_pack("wikipedia", "wikipedia"),
         _provider_pack("wikidata", "wikidata"),
         _provider_pack("hackernews", "hackernews"),
@@ -366,7 +365,7 @@ SEARCH_STRATEGY_MODES: dict[str, tuple[SearchStrategyPack, ...]] = {
         _provider_pack("semantic_scholar", "semantic scholar"),
     ),
     "news": (
-        _searxng_pack("reuters", "bing news", "duckduckgo news", "wikinews"),
+        _searxng_pack("reuters", "bing news", "duckduckgo news"),
     ),
     "private": (
         _provider_pack("github", "github"),
@@ -922,14 +921,14 @@ async def _search_strategy_impl(
         upstream_responses.append(upstream)
         combined_raw.extend(upstream.results)
         pack_results = _filter_search_results(
-            deduplicate_with_scoring(upstream.results),
+            deduplicate_with_scoring(upstream.results, query=q if normalized_mode == "general" else None),
             domain=domain,
             exclude_domains=exclude_domains,
         )
         if pack_results:
             coverage_groups.append(pack_results)
         current_results = _filter_search_results(
-            deduplicate_with_scoring(combined_raw),
+            deduplicate_with_scoring(combined_raw, query=q if normalized_mode == "general" else None),
             domain=domain,
             exclude_domains=exclude_domains,
         )
@@ -970,7 +969,7 @@ async def _search_strategy_impl(
             fallback_reason = "no_results" if not upstream.results else "insufficient_results"
 
     ranked_results = _filter_search_results(
-        deduplicate_with_scoring(combined_raw),
+        deduplicate_with_scoring(combined_raw, query=q if normalized_mode == "general" else None),
         domain=domain,
         exclude_domains=exclude_domains,
     )
@@ -1062,7 +1061,7 @@ async def search(
 
     _record_searxng_attempt(resolved_engines or "default", upstream)
 
-    results = deduplicate_with_scoring(upstream.results)
+    results = deduplicate_with_scoring(upstream.results, query=q)
     results = _filter_search_results(results, domain=domain, exclude_domains=exclude_domains)[:count]
 
     # Fetch content via kill chain if requested
@@ -1533,7 +1532,7 @@ async def read_batch(body: BatchReadRequest) -> BatchReadResponse:
 # NEWS ENDPOINT
 # =========================================================================
 
-NEWS_ENGINES = "reuters,bing news,duckduckgo news,wikinews"
+NEWS_ENGINES = "reuters,bing news,duckduckgo news"
 
 
 @app.get("/news", response_model=NewsResponse)
@@ -1552,7 +1551,9 @@ async def news(
     news_engines = engine_selection.value if engine_selection else NEWS_ENGINES
 
     try:
-        upstream = await _query_searxng(q, count * 3, engines=news_engines, categories="news")
+        # A category would add its other engines in SearXNG, overriding the
+        # caller's explicit source choice and our bounded default pack.
+        upstream = await _query_searxng(q, count * 3, engines=news_engines)
     except httpx.HTTPError as e:
         _record_searxng_error_attempt(news_engines, e, start)
         raise HTTPException(status_code=502, detail=f"SearXNG error: {e}")

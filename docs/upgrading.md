@@ -27,3 +27,24 @@ Do not use `down --volumes`: that would delete the data this migration preserves
 If rollback is needed, restore the previous images and Compose files with the
 same project name and retained volumes. A previous root-run image can still
 access data now owned by UID 10001. No package or image publication is required.
+
+## SearXNG 2026.9.5 configuration
+
+An image update does not update ignored runtime files. `prepare-searxng.sh`
+deliberately leaves existing `searxng/settings.yml` and `settings.tor.yml` intact.
+Back them up before upgrading, and compare them with the updated templates.
+Preserve each instance's secret, custom settings, and the private outgoing Tor
+proxy. For installations using the bundled defaults, regenerate from the new
+templates and restore each original `server.secret_key` before restarting.
+
+The new templates inherit the upstream Stack Overflow (`stackexchange`) and
+Wikinews (`mediawiki`) implementations instead of overriding them with nonexistent
+modules. Removed overrides for Reddit, Lobsters, and inactive Yahoo News do not
+promise those engines are available. DuckDuckGo News and Reuters are enabled in
+both configurations so the news strategy has the same declared sources.
+
+Run `python scripts/check_searxng_config.py` to check the committed templates
+against the pinned image. It loads both configurations in containers without
+network access; it does not measure live search quality. After deploying,
+inspect `/engines`, try both `mode=general` and `mode=news` on direct and private
+routes, and retain upstream degradation diagnostics in the results.

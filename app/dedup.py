@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+import re
+from urllib.parse import parse_qsl, unquote, urlencode, urlparse, urlunparse
 
 from app.models import SearchResult
 from app.url_utils import hostname_matches, normalize_hostname
@@ -145,8 +146,23 @@ def deduplicate(raw_results: list[dict]) -> list[SearchResult]:
     return results
 
 
-def deduplicate_with_scoring(raw_results: list[dict]) -> list[SearchResult]:
-    """Enhanced deduplication with domain authority and position scoring."""
+def deduplicate_with_scoring(raw_results: list[dict], *, query: str | None = None) -> list[SearchResult]:
+    """Deduplicate and rank; optional lexical coverage balances source priors.
+
+    Scores are ranking heuristics, not probabilities of correctness. Operators
+    and common connecting words are excluded from positive query coverage.
+    """
+    positive_words = []
+    for word in (query or '').split():
+        operator, separator, _ = word.partition(':')
+        if word.startswith('-') or (
+            separator and operator and all(char.isalnum() or char == '_' for char in operator)
+        ):
+            continue
+        positive_words.append(word)
+    positive_query = ' '.join(positive_words)
+    stop_words = {'a', 'an', 'the', 'and', 'or', 'of', 'to', 'in', 'for', 'on', 'with', 'is', 'are'}
+    query_terms = set(re.findall(r'[^\W_]+', positive_query.casefold())) - stop_words
     seen: dict[str, dict] = {}
     
     for i, r in enumerate(raw_results):
@@ -200,6 +216,11 @@ def deduplicate_with_scoring(raw_results: list[dict]) -> list[SearchResult]:
         
         # Combined score
         final_score = (engine_score * 0.4) + (domain_score * 0.3) + (position_score * 0.3)
+        if query_terms:
+            text = f"{item['title']} {unquote(item['url'])} {item['snippet']}"
+            result_terms = set(re.findall(r'[^\W_]+', text.casefold()))
+            coverage = len(query_terms & result_terms) / len(query_terms)
+            final_score = 0.6 * coverage + 0.4 * final_score
         
         results.append(
             SearchResult(
