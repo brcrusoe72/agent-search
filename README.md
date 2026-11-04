@@ -14,13 +14,16 @@ curl "http://localhost:3939/search?q=distributed+consensus+algorithms"
 
 You now have a deduplicated, multi-engine search API running on `:3939`.
 
-If you enable auth, pass the token on all endpoints except `/health`, `/live`, and `/ready`:
+To enable auth on the standard stack, set a token and recreate the API so it reads the new environment. Keep the token in your private deployment environment for subsequent Compose commands. Pass it on all endpoints except `/health`, `/live`, and `/ready`:
 
 ```bash
-export AGENT_SEARCH_TOKEN="change-me"
+export AGENT_SEARCH_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+docker compose up -d --no-deps api
 curl -H "Authorization: Bearer $AGENT_SEARCH_TOKEN" \
   "http://localhost:3939/search?q=distributed+consensus+algorithms"
 ```
+
+For an existing private stack, use the same Compose files and project name used at startup, and recreate both `api` and `api-private` with the token set. Setting a client token alone does not enable server authentication.
 
 Prefer not to use Docker for the API server?
 
@@ -33,7 +36,7 @@ cd agent-search
 
 Native mode requires Python 3.11+ and a reachable SearXNG instance with JSON output enabled. It stores AgentSearch state in `./data`. See [Native Install](docs/native-install.md).
 
-Existing Docker installations: follow [the upgrade procedure](docs/upgrading.md) before switching from a root-run image.
+Existing Docker installations: follow [the upgrade procedure](docs/upgrading.md) for data ownership, network changes, and migration of existing SearXNG settings.
 
 ## Verify
 
@@ -42,21 +45,27 @@ Run the self-contained test suite:
 ```bash
 python -m venv .venv
 . .venv/bin/activate
-pip install -r requirements.txt pytest requests
+pip install -r requirements.txt pytest requests build wheel "setuptools>=68"
 pip install -e sdk
 # MCP has a separate Pydantic requirement; keep it isolated.
 python -m venv .venv-mcp
 .venv-mcp/bin/python -m pip install -e mcp-server pytest
 .venv-mcp/bin/python -m pytest tests/test_mcp_contract.py -q
+.venv-mcp/bin/python -m pip check
 ./scripts/prepare-searxng.sh
 pytest tests -q
 python -m compileall app adapters mcp-server/agent_search_mcp scripts sdk -q
+python -m pip check
+```
+
+The self-contained tests mock SearXNG and do not require Docker or a running local service. Validate the container configuration and pinned engine templates separately with Docker available:
+
+```bash
 docker compose -f docker-compose.yml config --quiet
 docker compose -f docker-compose.yml -f examples/compose.private.yml config --quiet
 docker build -t agent-search-api:test .
+python scripts/check_searxng_config.py
 ```
-
-Those tests mock SearXNG, so they do not require Docker or a running local service.
 
 Run the optional live localhost check:
 
@@ -86,7 +95,7 @@ AgentSearch wraps [SearXNG](https://github.com/searxng/searxng) with a FastAPI l
 
 **Standard stack** — `docker compose up` gives you search on `:3939`.
 
-**Private stack** — `docker compose -f docker-compose.yml -f examples/compose.private.yml up` adds an anonymized instance on `:3940` that routes all traffic through Tor with Snowflake obfuscation. Encrypted DNS via CoreDNS → Cloudflare DoT. Network-level isolation — the private SearXNG instance runs on an internal-only Docker network with no route to the internet except through Tor.
+**Private stack** — `docker compose -f docker-compose.yml -f examples/compose.private.yml up` adds an instance on `:3940` that routes search and content-fetch traffic through Tor with Snowflake transport. Encrypted DNS via CoreDNS → Cloudflare DoT. Network-level isolation — the private SearXNG instance runs on an internal-only Docker network with no route to the internet except through Tor.
 
 ## Search engines
 
@@ -96,7 +105,7 @@ AgentSearch delegates engine support to the connected SearXNG instance. The auth
 curl "http://localhost:3939/engines"
 ```
 
-The bundled `searxng/settings.example.yml` explicitly enables 25 engines, including best-effort Google/Startpage/Yahoo entries plus Brave, Bing, DuckDuckGo, Google Scholar, Semantic Scholar, arXiv, Crossref, OpenAlex, PubMed, Bing News, Reuters, Wikinews, Wikipedia, Wikidata, Hugging Face, Reddit, Hacker News, Stack Overflow, GitHub, Docker Hub, and Lobsters.
+The bundled settings configure broad web, scholarly, news, reference, and developer sources using SearXNG 2026.9.5 (`searxng/searxng@sha256:55e1fa15a63ff04e79e213e6aa2837549877b0c6d60757cdb633ae9111cb5fea`). Both templates are checked against the pinned image in CI. Engine registration does not guarantee live availability: Google, Brave, Reuters, and other sources can still return blocks or rate limits. Inspect `/engines` and response diagnostics for the current instance. Existing runtime files need the [configuration upgrade steps](docs/upgrading.md#searxng-202695-configuration); changing the image alone does not migrate them.
 
 Run `./scripts/prepare-searxng.sh` to create ignored local runtime files at `searxng/settings.yml` and `searxng/settings.tor.yml` with generated SearXNG instance secrets. Do not commit those generated files.
 
@@ -108,15 +117,17 @@ Strategy modes can also use direct no-key providers for vertical search. These d
 
 SearXNG finds pages. AgentSearch fetches and reads them, scores and deduplicates the results, caches them, scrubs prompt injections, detects paywalls, and falls back through several extraction strategies when the first one fails — in one API call. It also logs fetch outcomes so you can see which strategies and domains are actually working.
 
-| | AgentSearch | Tavily | Exa | SerpAPI | Raw SearXNG |
-|---|---|---|---|---|---|
-| **Cost** | Free | $0.005/query | $0.001/query | $50/mo | Free |
-| **Self-hosted** | ✅ | ❌ | ❌ | ❌ | ✅ |
-| **Content extraction** | Multi-strategy + browser renderer | Basic | Basic | ❌ | ❌ |
-| **Deduplication** | Cross-engine | ❌ | ❌ | ❌ | ❌ |
-| **Prompt injection scrubbing** | ✅ | ❌ | ❌ | ❌ | ❌ |
-| **Adaptive (failure analysis)** | ✅ (evolver) | ❌ | ❌ | ❌ | ❌ |
-| **Tor anonymization** | Optional | ❌ | ❌ | ❌ | Manual |
+You operate the containers, storage, and network connection. AgentSearch does not charge per query; hosting and maintenance still have costs. The evolver analyzes recorded failures and returns recommendations; it does not automatically modify the running system.
+
+## Related projects
+
+For narrower tasks, these separate projects in the same GitHub account may be useful:
+
+- **[scholar](https://github.com/brcrusoe72/scholar-cli)**: scholarly search.
+- **[agent-read](https://github.com/brcrusoe72/agent-read)**: URL-to-text extraction.
+- **[agent-web](https://github.com/brcrusoe72/agent-web)**: browser interaction.
+
+See each repository for installation instructions and documentation.
 
 ## Endpoints
 
@@ -133,7 +144,7 @@ SearXNG finds pages. AgentSearch fetches and reads them, scores and deduplicates
 | `/search/sources` | GET | Source discovery with institutional filtering |
 | `/search/sources/institutions` | GET | List source registry institutions |
 | `/search/stats` | GET | Query statistics and cache metrics |
-| `/news` | GET | Structured multi-source news with reliable defaults and explicit engine overrides |
+| `/news` | GET | Structured multi-source news with upstream diagnostics and explicit engine overrides |
 
 ### Content extraction
 
@@ -143,7 +154,7 @@ SearXNG finds pages. AgentSearch fetches and reads them, scores and deduplicates
 | `/read/batch` | POST | Concurrent multi-URL extraction in one request |
 | `/providers/browser/fetch` | GET | Ephemeral browser render/extract for JS-rendered target pages |
 
-The extraction chain escalates through strategies until one succeeds:
+The extraction chain tries applicable strategies until one succeeds. PDF, YouTube, and site-specific handlers may run before the general fallbacks below:
 
 1. Direct fetch + smart content selectors
 2. Readability scoring (paragraph density vs link density)
@@ -156,7 +167,7 @@ The extraction chain escalates through strategies until one succeeds:
 9. PDF extraction (pdfplumber)
 10. YouTube transcript (yt-dlp)
 
-Every request gets fail-closed SSRF protection, prompt injection detection, paywall detection, and streamed content limits automatically. Browser rendering runs as a dedicated non-root service on an internal-only network, uses an ephemeral sandboxed context, and can reach targets only through the validating fetch proxy. It reports CAPTCHA/challenge pages instead of trying to bypass them.
+The bundled extraction paths validate destinations and redirects, bound fetched content, and apply content scrubbing and paywall detection. Scrubbing is heuristic: returned text remains untrusted. In the Docker stack, browser rendering runs as a dedicated non-root service on an internal-only network, uses an ephemeral sandboxed context, and can reach targets only through the validating fetch proxy. It reports CAPTCHA/challenge pages instead of trying to bypass them. Custom adapters execute local Python code and must be reviewed before installation.
 
 ### Adaptation
 
@@ -195,7 +206,9 @@ curl "http://localhost:3939/search?q=AI+regulation&mode=academic&count=5"
 curl "http://localhost:3939/search?q=Python&mode=reference&count=5"
 ```
 
-Modes validate or call only their declared sources instead of falling back silently: `general` tries Bing first, then uses DuckDuckGo/Brave and direct reference/community providers only when more coverage is needed; `code` uses direct GitHub, MDN, Docker Hub, and PyPI providers; `academic` uses direct arXiv, Crossref, OpenAlex, and Semantic Scholar providers; `news` uses Reuters, Bing News, DuckDuckGo News, and Wikinews through SearXNG; `reference` uses direct Wikipedia and Wikidata providers; `community` uses direct Hacker News; `private` avoids broad general web engines.
+Modes validate or call only their declared sources instead of falling back silently: `general` queries DuckDuckGo, Brave, and Bing together, then uses direct reference/community providers when more coverage is needed; `code` uses direct GitHub, MDN, Docker Hub, and PyPI providers; `academic` uses direct arXiv, Crossref, OpenAlex, and Semantic Scholar providers; `news` uses Reuters, Bing News, and DuckDuckGo News through SearXNG; `reference` uses direct Wikipedia and Wikidata providers; `community` uses direct Hacker News; `private` avoids broad general web engines.
+
+Ordinary `/search` and `mode=general` balance query-term coverage with engine agreement, source priors, and upstream position. Scores are ranking heuristics, not probabilities of correctness. Query matching improves some irrelevant-result failures but does not establish that a result answers the question. Upstream blocks remain visible even when another engine supplies results.
 
 Each strategy response includes `meta.engine_attempts` with source/provider, query, raw result count, latency, and upstream errors so blocked or empty providers stay visible.
 
@@ -214,7 +227,7 @@ Telemetry is in-memory and reflects live attempts since the API process started.
 curl "http://localhost:3939/search/deep?q=ethon+industrial+ai+platform&count=10"
 ```
 
-Server-side query variation + parallel execution + result fusion. Surfaces results that flat `/search` misses.
+Server-side query variation + parallel execution + result fusion. It can find additional results, but query expansion does not guarantee better relevance.
 
 ### Read a URL (escalating extraction)
 
@@ -301,14 +314,15 @@ def web_search(query: str) -> str:
 ### MCP server (Claude Desktop, Cursor, Windsurf)
 
 ```bash
-pip install mcp httpx
-python mcp-server/server.py
+python3 -m venv .venv-mcp
+.venv-mcp/bin/python -m pip install -e ./mcp-server
+.venv-mcp/bin/agent-search-mcp
 ```
 
 For authenticated instances, set `AGENT_SEARCH_TOKEN` or run:
 
 ```bash
-python mcp-server/server.py --token "change-me"
+.venv-mcp/bin/agent-search-mcp --token "change-me"
 ```
 
 Add to Claude Desktop config:
@@ -317,18 +331,17 @@ Add to Claude Desktop config:
 {
   "mcpServers": {
     "agent-search": {
-      "command": "python",
-      "args": ["/path/to/mcp-server/server.py"]
+      "command": "/absolute/path/to/agent-search/.venv-mcp/bin/agent-search-mcp"
     }
   }
 }
 ```
 
-See [`mcp-server/README.md`](mcp-server/README.md) for details.
+Install from the repository root. The separate environment applies the MCP package's declared dependency bounds without changing the API environment. Use the absolute executable path in your client config; on Windows it is `.venv-mcp\Scripts\agent-search-mcp.exe`. See [`mcp-server/README.md`](mcp-server/README.md) for details.
 
 ## Private stack (Tor + encrypted DNS)
 
-The optional private stack adds a fully anonymized search path:
+The optional private stack routes search and content-fetch traffic through Tor:
 
 ```
 ┌──────────┐    ┌──────────────┐    ┌───────────────┐    ┌──────────┐
@@ -341,9 +354,9 @@ The optional private stack adds a fully anonymized search path:
 ```
 
 **What this gives you:**
-- Your ISP sees TLS to Cloudflare (DNS) and WebRTC-looking traffic (Snowflake). Not search queries.
+- The bundled configuration uses encrypted DNS and Tor with Snowflake transport. Network observers can still see connection metadata; this is not a guarantee of anonymity.
 - The private SearXNG instance lives on an internal-only Docker network with no internet route except through Tor.
-- Port 3939 = direct (fast), port 3940 = anonymized (slower, private).
+- Port 3939 = direct; port 3940 = Tor-routed and typically slower. Providers still receive your query text, and AgentSearch stores local query/fetch records and cached content.
 
 **Setup:**
 
@@ -379,30 +392,26 @@ Port 3939 (direct)                    Port 3940 (Tor-anonymized)
 └─────────┘
 ```
 
-### Key modules (6,700 LOC)
+### Key modules
 
-| Module | LOC | What it does |
-|---|---|---|
-| `killchain.py` | 1016 | Escalating content extraction and browser-render fallback |
-| `browser_renderer.py` | 320 | Ephemeral browser rendering, extraction, and challenge detection |
-| `main.py` | 920 | FastAPI app, 17 endpoints, auth, rate limiting |
-| `source_tracer.py` | 620 | Source provenance tracking and citation chains |
-| `scrubber.py` | 539 | Prompt injection detection and content sanitization |
-| `source_library.py` | 310 | Curated institutional source registry |
-| `domain_trust.py` | 311 | Domain trust scoring (TLD, age, reputation) |
-| `evolver.py` | 301 | Adaptation engine — failure analysis → config tuning |
-| `content_cache.py` | 241 | URL-keyed content cache with TTL |
-| `query_expansion.py` | 201 | Server-side query variation and fusion |
+| Module | What it does |
+|---|---|
+| `killchain.py` | Escalating content extraction and browser-render fallback |
+| `browser_renderer.py` | Ephemeral browser rendering, extraction, and challenge detection |
+| `main.py` | FastAPI endpoints, auth, and rate limiting |
+| `source_tracer.py` | Source provenance tracking and citation chains |
+| `scrubber.py` | Heuristic prompt injection detection and content sanitization |
+| `source_library.py` | Curated institutional source registry |
+| `domain_trust.py` | Heuristic domain trust scoring |
+| `evolver.py` | Failure analysis and read-only recommendations |
+| `content_cache.py` | URL-keyed content cache with TTL |
+| `query_expansion.py` | Server-side query variation and fusion |
 
 Plus: 5 pluggable adapters (Cloudflare bypass, Medium, 403 handler, parse error recovery, empty content fallback), MCP server, Python SDK, test suite.
 
-## Case study: 0 → 17 frameworks per hunt
+## Integration case study
 
-A real autonomous research agent ("the wolf") uses every AgentSearch endpoint. Before AgentSearch was wired in correctly, the agent's hand-rolled SearXNG client silently 401'd on three of four engines. Every hunt on a low-profile entity returned **0 frameworks**.
-
-After: **17 frameworks per hunt, 7/7 gaps closed.** Same agent, same model, same prompts. The difference was the search infrastructure underneath.
-
-→ Full walkthrough: [`case-studies/wolf.md`](case-studies/wolf.md)
+The historical [research-agent walkthrough](case-studies/wolf.md) describes an authentication repair and an integration pattern. Its reported outcomes are specific to that system; the underlying agent and evaluation data are not included here. Treat it as an integration example, not a reproducible benchmark for the current release.
 
 ## Configuration
 
@@ -411,7 +420,7 @@ Environment variables (set in `docker-compose.yml` or `.env`):
 | Variable | Default | Description |
 |---|---|---|
 | `SEARXNG_URL` | `http://searxng:8080` | SearXNG instance URL |
-| `SEARXNG_IMAGE` | pinned SearXNG digest | SearXNG container image; override only when intentionally upgrading |
+| `SEARXNG_IMAGE` | pinned SearXNG digest (2026.9.5) | SearXNG container image; override only after a live engine comparison on the candidate |
 | `PYTHON_BASE_IMAGE` | pinned Python digest | API Docker base image; override only when intentionally upgrading |
 | `COREDNS_IMAGE` | pinned CoreDNS digest | Private-stack DNS image |
 | `SOCAT_IMAGE` | pinned socat digest | Private-stack TCP forwarder image |
@@ -432,7 +441,7 @@ Environment variables (set in `docker-compose.yml` or `.env`):
 - Bearer auth is a simple local API gate, not a multi-user authorization system. Treat `AGENT_SEARCH_TOKEN` as a shared service token.
 - Rate limiting is in memory. It resets on restart and is per API process.
 - Query statistics use local SQLite with WAL and a bounded lock timeout. For high-volume multi-worker deployments, move query logging to an external database or telemetry backend.
-- The MCP package intentionally bounds its `mcp` dependency to the tested 1.27.x line. Upgrade deliberately and run the package/CI checks before publishing.
+- The MCP package supports `mcp>=1.27.2,<2.3.0`. CI tests both 1.27.2 and 2.2.0 in isolated environments, including real stdio discovery, successful invocation, and error semantics. Upgrade deliberately and run the package/CI checks before publishing.
 - Content extraction validates the starting URL and every redirect hop before fetching redirected content, but fetched third-party pages are still untrusted and are scrubbed before being returned.
 - Google Cache is unreliable because public cache availability changes frequently.
 - The Tor/private stack is intentionally slower than direct search.

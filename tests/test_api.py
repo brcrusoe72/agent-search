@@ -329,7 +329,7 @@ class EngineAwareFakeSearxngClient:
             search_params = params or {}
             self.search_params.append(dict(search_params))
             engine = search_params.get("engines")
-            if engine == "bing" and "fallback" in search_params.get("q", ""):
+            if engine == "duckduckgo,brave,bing" and "fallback" in search_params.get("q", ""):
                 return FakeResponse({"results": []})
 
             engine_names = [item.strip() for item in (engine or "bing").split(",") if item.strip()]
@@ -575,7 +575,7 @@ def test_search_strategy_rejects_unknown_mode(client: AppClient) -> None:
     assert "code" in detail["available_modes"]
 
 
-def test_search_strategy_general_uses_bing_first(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
+def test_search_strategy_general_queries_multiple_web_engines(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
     fake = EngineAwareFakeSearxngClient()
     monkeypatch.setattr(main, "http_client", fake)
 
@@ -583,13 +583,13 @@ def test_search_strategy_general_uses_bing_first(monkeypatch: pytest.MonkeyPatch
 
     assert response.status_code == 200
     data = response.json()
-    assert fake.search_params == [{"q": "python", "format": "json", "pageno": 1, "engines": "bing"}]
+    assert fake.search_params == [{"q": "python", "format": "json", "pageno": 1, "engines": "duckduckgo,brave,bing"}]
     assert data["meta"]["mode"] == "general"
-    assert data["meta"]["engine_attempts"][0]["engines"] == ["bing"]
+    assert data["meta"]["engine_attempts"][0]["engines"] == ["duckduckgo", "brave", "bing"]
     assert data["meta"]["fallback_reason"] is None
 
 
-def test_search_strategy_general_falls_back_to_non_bing_pack(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
+def test_search_strategy_general_falls_back_to_reference_provider(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
     fake = EngineAwareFakeSearxngClient()
     monkeypatch.setattr(main, "http_client", fake)
 
@@ -598,12 +598,48 @@ def test_search_strategy_general_falls_back_to_non_bing_pack(monkeypatch: pytest
     assert response.status_code == 200
     data = response.json()
     assert [params["engines"] for params in fake.search_params] == [
-        "bing",
-        "duckduckgo,brave",
+        "duckduckgo,brave,bing",
     ]
     assert data["meta"]["fallback_reason"] == "no_results"
-    assert data["meta"]["engine_attempts"][1]["engines"] == ["duckduckgo", "brave"]
+    assert data["meta"]["engine_attempts"][1]["engines"] == ["wikipedia"]
     assert "bing" not in data["meta"]["engines_used"]
+
+
+@pytest.mark.parametrize("mode", [None, "general"])
+def test_search_ranks_query_match_above_unrelated_authoritative_results(monkeypatch, client, mode) -> None:
+    class RelevantWebClient(EngineAwareFakeSearxngClient):
+        async def get(self, url, params=None, **kwargs):
+            if str(url).endswith("/search"):
+                return FakeResponse({"results": [
+                    {"title": "Python home", "url": "https://github.com/python", "content": "Python software", "engines": ["bing"]},
+                    {"title": "Python downloads", "url": "https://wikipedia.org/python", "content": "Python software", "engines": ["bing"]},
+                    {"title": "Python asyncio TaskGroup documentation", "url": "https://example.org/taskgroup", "content": "Task groups in asyncio", "engines": ["duckduckgo"]},
+                ], "unresponsive_engines": [["brave", "too many requests"]]})
+            return await super().get(url, params=params, **kwargs)
+
+    monkeypatch.setattr(main, "http_client", RelevantWebClient())
+    params = {"q": "Python asyncio TaskGroup documentation", "count": 1}
+    if mode:
+        params["mode"] = mode
+    response = client.get("/search", params=params)
+    assert response.status_code == 200
+    assert response.json()["results"][0]["url"] == "https://example.org/taskgroup"
+    assert response.json()["meta"]["upstream_status"] == "degraded"
+
+
+def test_query_ranking_ignores_search_operators_and_preserves_deduplication() -> None:
+    raw = [
+        {"title": "TaskGroup", "url": "https://example.org/taskgroup", "engines": ["bing"]},
+        {"title": "TaskGroup", "url": "https://example.org/taskgroup?utm_source=test", "engines": ["duckduckgo"]},
+        {"title": "Python", "url": "https://example.org/python", "engines": ["bing"]},
+    ]
+    plain = deduplicate_with_scoring(raw, query="TaskGroup")
+    operators = deduplicate_with_scoring(raw, query="site:example.org TaskGroup -Python")
+    assert [r.model_dump() for r in plain] == [r.model_dump() for r in operators]
+    assert len(plain) == 2
+    assert set(plain[0].engines) == {"bing", "duckduckgo"}
+    assert [r.position for r in plain] == [1, 2]
+    assert all(0 <= r.score <= 1 for r in plain)
 
 
 def test_search_strategy_code_uses_direct_code_providers(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
@@ -693,11 +729,11 @@ def test_search_strategy_news_uses_requested_news_pack(monkeypatch: pytest.Monke
     response = client.get("/search", params={"q": "semiconductors", "count": 3, "mode": "news"})
 
     assert response.status_code == 200
-    assert fake.search_params[0]["engines"] == "reuters,bing news,duckduckgo news,wikinews"
+    assert fake.search_params[0]["engines"] == "reuters,bing news,duckduckgo news"
     assert "categories" not in fake.search_params[0]
     meta = response.json()["meta"]
     assert meta["mode"] == "news"
-    assert meta["engine_attempts"][0]["engines"] == ["reuters", "bing news", "duckduckgo news", "wikinews"]
+    assert meta["engine_attempts"][0]["engines"] == ["reuters", "bing news", "duckduckgo news"]
 
 
 def test_provider_stats_and_health_record_direct_attempts(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:
@@ -743,6 +779,20 @@ def test_search_records_searxng_error_attempt(monkeypatch: pytest.MonkeyPatch, c
     assert row["errors"] == 1
     assert row["health"] == "error"
     assert "SearXNG error" in row["last_error"]
+
+
+@pytest.mark.parametrize('engines,expected', [(None, 'reuters,bing news,duckduckgo news'), ('bing news', 'bing news')])
+def test_news_does_not_expand_requested_sources_via_category(monkeypatch, client, engines, expected):
+    fake = EngineAwareFakeSearxngClient()
+    monkeypatch.setattr(main, 'http_client', fake)
+    params = {'q': 'semiconductors', 'count': 3}
+    if engines:
+        params['engines'] = engines
+    response = client.get('/news', params=params)
+    assert response.status_code == 200
+    assert fake.search_params[0]['engines'] == expected
+    assert 'categories' not in fake.search_params[0]
+    assert set(response.json()['meta']['engines_used']).issubset(set(expected.split(',')))
 
 
 def test_news_records_searxng_error_attempt(monkeypatch: pytest.MonkeyPatch, client: AppClient) -> None:

@@ -79,12 +79,18 @@ def _get_response(base_url: str, path: str, *, headers: dict[str, str] | None = 
     )
 
 
-def _assert_no_direct_egress(compose_files: list[str], services: tuple[str, ...]) -> None:
+def _assert_no_direct_egress(services: tuple[str, ...]) -> None:
+    probe = """
+import errno, json, socket
+try:
+    with socket.create_connection(('1.1.1.1', 443), 5):
+        print(json.dumps({'blocked': False}))
+except OSError as exc:
+    print(json.dumps({'blocked': exc.errno in (errno.ENETUNREACH, errno.EHOSTUNREACH, errno.EACCES, errno.EPERM), 'errno': exc.errno}))
+"""
     for service in services:
         command = [
-            "docker", "compose", *compose_files,
-            "exec", "-T", service, "python", "-c",
-            "import socket; socket.create_connection(('1.1.1.1',443),5)",
+            "docker", "exec", f"agent-search-{service}", "python", "-c", probe,
         ]
         completed = subprocess.run(
             command,
@@ -93,7 +99,9 @@ def _assert_no_direct_egress(compose_files: list[str], services: tuple[str, ...]
             text=True,
             timeout=15,
         )
-        assert completed.returncode != 0, f"{service} unexpectedly established direct public egress"
+        assert completed.returncode == 0, f"{service} egress probe did not execute: {completed.stderr}"
+        result = json.loads(completed.stdout.strip())
+        assert result["blocked"] is True, f"{service} did not demonstrate blocked direct public egress: {result}"
 
 
 def test_public_health() -> None:
@@ -112,7 +120,7 @@ def test_public_liveness_reports_direct_route() -> None:
 
 
 def test_public_workers_have_no_direct_egress() -> None:
-    _assert_no_direct_egress([], ("api", "browser"))
+    _assert_no_direct_egress(("api", "browser"))
 
 
 def test_public_engines_authenticated() -> None:
@@ -217,8 +225,7 @@ def test_private_liveness_reports_tor_route() -> None:
 
 def test_private_proxy_observes_tor_exit() -> None:
     command = [
-        "docker", "compose", "-f", "docker-compose.yml", "-f", "examples/compose.private.yml",
-        "exec", "-T", "api-private", "python", "-c",
+        "docker", "exec", "agent-search-api-private", "python", "-c",
         (
             "import json,urllib.request; "
             "data=json.load(urllib.request.urlopen('https://check.torproject.org/api/ip',timeout=60)); "
@@ -231,10 +238,7 @@ def test_private_proxy_observes_tor_exit() -> None:
 
 
 def test_private_workers_have_no_direct_egress() -> None:
-    _assert_no_direct_egress(
-        ["-f", "docker-compose.yml", "-f", "examples/compose.private.yml"],
-        ("api-private", "browser-private"),
-    )
+    _assert_no_direct_egress(("api-private", "browser-private"))
 
 
 def test_private_search_authenticated() -> None:
