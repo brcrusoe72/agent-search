@@ -78,9 +78,14 @@ def rank_academic(raw_results: list[dict], *, query: str) -> list[SearchResult]:
         groups.append(group)
 
     terms = words(query)
+    query_ids = _identities({"url": query.strip(), "doi": re.sub(r"^doi:\s*", "", query.strip(), flags=re.I),
+                             "arxiv_id": arxiv_query(query).get("id_list", "")})
+    query_ids = {identity for identity in query_ids if identity.startswith(("arxiv:", "doi:"))}
     results = []
     for group in groups:
         def relevance(row):
+            if query_ids:
+                return float(bool(query_ids & group["ids"]))
             title_text = str(row.get("title") or "")
             title = words(title_text)
             authors = words(" ".join(row.get("authors") or []))

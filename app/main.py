@@ -940,9 +940,18 @@ async def _search_strategy_impl(
             raise HTTPException(status_code=500, detail=f"Unknown strategy source: {pack.source}")
 
         upstream_responses.append(upstream)
-        combined_raw.extend(upstream.results)
+        ranking_raw = upstream.results
+        if normalized_mode == "academic":
+            # Apply restrictions before identifier merging chooses one URL.
+            # Otherwise a DOI alias can hide an eligible arXiv/publisher URL.
+            include = _normalize_domain_filter(domain) if domain else ""
+            excluded = [_normalize_domain_filter(d) for d in (exclude_domains or "").split(",")]
+            ranking_raw = [r for r in ranking_raw
+                           if (not domain or _hostname_matches(_result_hostname(r["url"]), include))
+                           and not any(_hostname_matches(_result_hostname(r["url"]), d) for d in excluded)]
+        combined_raw.extend(ranking_raw)
         pack_results = _filter_search_results(
-            (rank_academic(upstream.results, query=q) if normalized_mode == "academic" else
+            (rank_academic(ranking_raw, query=q) if normalized_mode == "academic" else
              deduplicate_with_scoring(upstream.results, query=q if normalized_mode == "general" else None)),
             domain=domain,
             exclude_domains=exclude_domains,

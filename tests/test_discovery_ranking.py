@@ -7,6 +7,9 @@ import pytest
 from app.dedup import deduplicate_with_scoring
 from app.scholarly import arxiv_query, rank_academic
 from app.search_providers import ArxivProvider, CrossrefProvider, OpenAlexProvider, SemanticScholarProvider
+from app import main
+from app.search_providers import ProviderResponse
+from tests.test_api import AppClient, isolated_app_state  # noqa: F401
 
 
 def paper(title, url, engine, **metadata):
@@ -82,6 +85,31 @@ def test_exact_title_beats_reordered_words_even_without_citations():
     rows = [paper("Is Attention All You Need?", "https://doi.org/10.1234/other", "crossref", citation_count=100),
             paper("Attention Is All You Need", "https://arxiv.org/abs/1706.03762", "arxiv")]
     assert rank_academic(rows, query="Attention Is All You Need")[0].engines == ["arxiv"]
+
+
+@pytest.mark.parametrize("query", ["1706.03762", "arXiv:1706.03762v7", "https://arxiv.org/abs/1706.03762",
+                                  "10.48550/arxiv.1706.03762", "https://doi.org/10.48550/arxiv.1706.03762"])
+def test_identifier_match_beats_highly_cited_unrelated_paper(query):
+    rows = [paper("Unrelated", "https://doi.org/10.1234/other", "crossref", citation_count=1000000),
+            paper("Attention Is All You Need", "https://arxiv.org/abs/1706.03762v7", "arxiv")]
+    assert rank_academic(rows, query=query)[0].engines == ["arxiv"]
+
+
+@pytest.mark.parametrize("filters", [{"domain": "arxiv.org"}, {"exclude_domains": "doi.org"}])
+def test_academic_api_retains_eligible_url_before_identity_merge(monkeypatch, filters):
+    class Provider:
+        def __init__(self, name):
+            self.name = name
+        async def search(self, client, query, count):
+            rows = ([paper("Attention Is All You Need", "https://arxiv.org/abs/1706.03762", "arxiv")]
+                    if self.name == "arxiv" else
+                    [paper("Attention Is All You Need", "https://doi.org/10.48550/arxiv.1706.03762", self.name)])
+            return ProviderResponse(results=rows, provider=self.name)
+    monkeypatch.setattr(main, "provider_by_name", Provider)
+    monkeypatch.setattr(main, "http_client", object())
+    response = AppClient().get('/search', params={"q": "Attention Is All You Need", "mode": "academic", "count": 1, **filters})
+    assert response.status_code == 200
+    assert response.json()["results"][0]["url"] == "https://arxiv.org/abs/1706.03762"
 
 
 def test_exact_documentation_page_beats_home_search_listing_and_mirror():
