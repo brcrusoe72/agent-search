@@ -87,6 +87,27 @@ AGENTSEARCH_DOCKER_INTEGRATION=1 \
 pytest tests/test_live_docker.py -q
 ```
 
+For a small, on-demand live pilot, use the eight fixed cases covering general,
+code, academic, and news search. Set `AGENT_SEARCH_TOKEN` when auth is enabled:
+
+```bash
+python scripts/check_search_pilot.py benchmark --label YOUR_DEPLOYED_COMMIT-direct --output /tmp/search-pilot.json
+python scripts/check_search_pilot.py reliability --seconds 300 --label YOUR_DEPLOYED_COMMIT-direct --output /tmp/search-reliability.json
+```
+
+Use `--base-url http://127.0.0.1:3940` and a separate output/label for Tor.
+The benchmark makes eight search requests and records cache state, timing,
+upstream diagnostics, and the first three results. Academic targets use paper
+identifiers; news needs human relevance and publication-date review. A successful
+script exit means the requests completed, not that the relevance targets passed.
+
+The reliability pilot probes readiness every 30 seconds for five minutes, then
+warms one query and sends seven requests at concurrency 1, 2, and 4. It checks
+that those requests use cached, consistent results. This measures a short health
+window and cached API handling, not multi-day uptime or uncached search capacity.
+The runner allows at most 12 benchmark cases and ten minutes per reliability run;
+it creates no schedule. Reports can contain queries and third-party result text.
+
 ---
 
 ## What it does
@@ -209,6 +230,11 @@ curl "http://localhost:3939/search?q=Python&mode=reference&count=5"
 Modes validate or call only their declared sources instead of falling back silently: `general` queries DuckDuckGo, Brave, and Bing together, then uses direct reference/community providers when more coverage is needed; `code` uses direct GitHub, MDN, Docker Hub, and PyPI providers; `academic` uses direct arXiv, Crossref, OpenAlex, and Semantic Scholar providers; `news` uses Reuters, Bing News, and DuckDuckGo News through SearXNG; `reference` uses direct Wikipedia and Wikidata providers; `community` uses direct Hacker News; `private` avoids broad general web engines.
 
 Ordinary `/search` and `mode=general` balance query-term coverage with engine agreement, source priors, and upstream position. Scores are ranking heuristics, not probabilities of correctness. Query matching improves some irrelevant-result failures but does not establish that a result answers the question. Upstream blocks remain visible even when another engine supplies results.
+
+In `mode=code`, explicit Python package or PyPI lookups preserve exact package
+matches ahead of provider diversity. Other code and academic results still need
+relevance review. Empty responses caused by upstream errors are not cached for
+the normal result TTL, so the next request can observe recovery.
 
 Each strategy response includes `meta.engine_attempts` with source/provider, query, raw result count, latency, and upstream errors so blocked or empty providers stay visible.
 
