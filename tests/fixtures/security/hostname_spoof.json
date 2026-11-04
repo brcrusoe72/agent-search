@@ -1,0 +1,9 @@
+{
+  "cases": [
+    {"hostname": "rand.org", "expected_domain": "rand.org"},
+    {"hostname": "reports.rand.org", "expected_domain": "rand.org"},
+    {"hostname": "rand.org.evil.example", "expected_domain": null},
+    {"hostname": "evil-rand.org.attacker.example", "expected_domain": null},
+    {"hostname": "www.brookings.edu", "expected_domain": "brookings.edu"}
+  ]
+}

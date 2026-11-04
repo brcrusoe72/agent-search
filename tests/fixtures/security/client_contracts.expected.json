@@ -1,0 +1,10 @@
+{
+  "sdk_preserves_provenance_and_trust": true,
+  "mcp_preserves_protocol_error_state": true,
+  "mcp_version_range": ">=1.27.2,<1.28.0",
+  "http://localhost:3939": "allowed",
+  "https://search.example": "allowed",
+  "http://search.example": "blocked",
+  "http://search.example?allow_insecure_http=true": "allowed",
+  "cwd_token_autoloaded": false
+}

@@ -26,7 +26,7 @@ Built on [AgentSearch](https://github.com/brcrusoe72/agent-search), which wraps 
 
 | Tool | Description |
 |------|-------------|
-| `health` | Check API, SearXNG, and live search health |
+| `health` | Check API and bounded SearXNG readiness without issuing a search |
 | `engines` | List configured SearXNG engines |
 | `providers_health` | Summarize provider health from recorded live attempts |
 | `providers_stats` | Return rolling provider/SearXNG attempt telemetry |
@@ -59,15 +59,20 @@ pip install mcp httpx
 # Default (AgentSearch at localhost:3939)
 python server.py
 
-# Custom host/port
-python server.py --host 192.168.1.10 --port 4000
+# Custom HTTPS endpoint
+python server.py --base-url https://search.example
 
 # Token-protected AgentSearch
 AGENT_SEARCH_TOKEN="change-me" python server.py
 python server.py --token "change-me"
 ```
 
-The MCP server loads a bearer token from `--token`, `AGENT_SEARCH_TOKEN`, `AGENTSEARCH_TOKEN`, `./credentials/agent-search-token.txt`, `~/.openclaw/workspace/credentials/agent-search-token.txt`, or `~/.config/agent-search/token`.
+The MCP server loads a bearer token from `--token`, `AGENT_SEARCH_TOKEN`,
+`AGENTSEARCH_TOKEN`, `~/.openclaw/workspace/credentials/agent-search-token.txt`,
+or `~/.config/agent-search/token`. It never implicitly trusts a credential file
+from the current working directory. A token over remote plaintext HTTP is
+rejected; use HTTPS. Legacy deployments require the explicit
+`--allow-insecure-http` opt-in.
 
 ## Search engines
 

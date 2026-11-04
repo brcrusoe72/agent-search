@@ -35,6 +35,7 @@ class SearchMeta:
     upstream_status: str = "ok"
     upstream_errors: List[str] = field(default_factory=list)
     unresponsive_engines: List[str] = field(default_factory=list)
+    network_route: str = "direct"
 
 
 @dataclass
@@ -46,10 +47,25 @@ class SearchResponse:
 
 
 @dataclass
+class TrustInfo:
+    """Trust assessment returned for a requested or fetched domain."""
+
+    domain: str = ""
+    tier: str = "unknown"
+    score: float = 0.5
+    reasons: List[str] = field(default_factory=list)
+    https: bool = True
+    domain_age_days: Optional[int] = None
+    lookalike_of: Optional[str] = None
+
+
+@dataclass
 class ReadResult:
     """Response from content extraction."""
 
     url: str = ""
+    fetched_url: str = ""
+    derived_from: Optional[str] = None
     content: Optional[str] = None
     strategy: Optional[str] = None
     chars: int = 0
@@ -57,6 +73,8 @@ class ReadResult:
     strategies_tried: List[str] = field(default_factory=list)
     error: Optional[str] = None
     success: bool = False
+    trust: Optional[TrustInfo] = None
+    requested_trust: Optional[TrustInfo] = None
 
 
 @dataclass
@@ -82,6 +100,8 @@ class BrowserFetchResponse:
     """Response from browser-render extraction."""
 
     url: str = ""
+    fetched_url: str = ""
+    derived_from: Optional[str] = None
     final_url: str = ""
     title: str = ""
     content: Optional[str] = None
@@ -93,6 +113,8 @@ class BrowserFetchResponse:
     challenge_detected: bool = False
     blocked_reason: Optional[str] = None
     render_time_ms: float = 0.0
+    trust: Optional[TrustInfo] = None
+    requested_trust: Optional[TrustInfo] = None
 
 
 @dataclass
@@ -149,3 +171,4 @@ class HealthResponse:
     upstream_errors: List[str] = field(default_factory=list)
     unresponsive_engines: List[str] = field(default_factory=list)
     version: str = ""
+    network_route: str = "direct"

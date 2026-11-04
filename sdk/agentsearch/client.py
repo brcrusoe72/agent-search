@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import ipaddress
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
 from .models import (
@@ -23,6 +24,7 @@ from .models import (
     SearchMeta,
     SearchResponse,
     SearchResult,
+    TrustInfo,
 )
 
 
@@ -52,10 +54,17 @@ class AgentSearch:
             print(r.title, r.url)
     """
 
-    def __init__(self, base_url: str = "http://localhost:3939", timeout: float = 30.0, token: str | None = None):
+    def __init__(
+        self,
+        base_url: str = "http://localhost:3939",
+        timeout: float = 30.0,
+        token: str | None = None,
+        allow_insecure_http: bool = False,
+    ):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.token = token or self._load_token()
+        self._validate_transport(allow_insecure_http=allow_insecure_http)
         self._session: Any = None
 
         # Try to use httpx for connection pooling
@@ -72,7 +81,6 @@ class AgentSearch:
         if token:
             return token
         for path in [
-            Path.cwd() / "credentials/agent-search-token.txt",
             Path.home() / ".openclaw/workspace/credentials/agent-search-token.txt",
             Path.home() / ".config/agent-search/token",
         ]:
@@ -84,6 +92,25 @@ class AgentSearch:
             except Exception:
                 continue
         return None
+
+    def _validate_transport(self, *, allow_insecure_http: bool) -> None:
+        parsed = urlparse(self.base_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise AgentSearchError("base_url must be an absolute HTTP(S) URL")
+        if not self.token or parsed.scheme == "https" or allow_insecure_http:
+            return
+        hostname = parsed.hostname.lower().rstrip(".")
+        loopback = hostname == "localhost" or hostname.endswith(".localhost")
+        if not loopback:
+            try:
+                loopback = ipaddress.ip_address(hostname).is_loopback
+            except ValueError:
+                loopback = False
+        if not loopback:
+            raise AgentSearchError(
+                "Refusing to send a bearer token over non-loopback plaintext HTTP; "
+                "use HTTPS or set allow_insecure_http=True explicitly"
+            )
 
     def _headers(self) -> Dict[str, str]:
         headers = {"Accept": "application/json"}
@@ -211,6 +238,21 @@ class AgentSearch:
             upstream_status=m.get("upstream_status", "ok"),
             upstream_errors=m.get("upstream_errors", []),
             unresponsive_engines=m.get("unresponsive_engines", []),
+            network_route=m.get("network_route", "direct"),
+        )
+
+    @staticmethod
+    def _parse_trust(d: Any) -> TrustInfo | None:
+        if not isinstance(d, dict):
+            return None
+        return TrustInfo(
+            domain=d.get("domain", ""),
+            tier=d.get("tier", "unknown"),
+            score=d.get("score", 0.5),
+            reasons=d.get("reasons", []),
+            https=d.get("https", True),
+            domain_age_days=d.get("domain_age_days"),
+            lookalike_of=d.get("lookalike_of"),
         )
 
     @staticmethod
@@ -229,6 +271,8 @@ class AgentSearch:
     def _parse_read_result(d: Dict[str, Any]) -> ReadResult:
         return ReadResult(
             url=d.get("url", ""),
+            fetched_url=d.get("fetched_url", d.get("url", "")),
+            derived_from=d.get("derived_from"),
             content=d.get("content"),
             strategy=d.get("strategy"),
             chars=d.get("chars", 0),
@@ -236,12 +280,16 @@ class AgentSearch:
             strategies_tried=d.get("strategies_tried", []),
             error=d.get("error"),
             success=d.get("success", False),
+            trust=AgentSearch._parse_trust(d.get("trust")),
+            requested_trust=AgentSearch._parse_trust(d.get("requested_trust")),
         )
 
     @staticmethod
     def _parse_browser_fetch_response(d: Dict[str, Any]) -> BrowserFetchResponse:
         return BrowserFetchResponse(
             url=d.get("url", ""),
+            fetched_url=d.get("fetched_url", d.get("final_url", d.get("url", ""))),
+            derived_from=d.get("derived_from"),
             final_url=d.get("final_url", ""),
             title=d.get("title", ""),
             content=d.get("content"),
@@ -257,6 +305,8 @@ class AgentSearch:
             challenge_detected=d.get("challenge_detected", False),
             blocked_reason=d.get("blocked_reason"),
             render_time_ms=d.get("render_time_ms", 0.0),
+            trust=AgentSearch._parse_trust(d.get("trust")),
+            requested_trust=AgentSearch._parse_trust(d.get("requested_trust")),
         )
 
     @staticmethod
@@ -587,6 +637,7 @@ class AgentSearch:
             upstream_errors=data.get("upstream_errors", []),
             unresponsive_engines=data.get("unresponsive_engines", []),
             version=data.get("version", ""),
+            network_route=data.get("network_route", "direct"),
         )
 
     def providers_stats(self) -> Dict[str, Any]:
