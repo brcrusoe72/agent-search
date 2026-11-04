@@ -229,7 +229,16 @@ curl "http://localhost:3939/search?q=Python&mode=reference&count=5"
 
 Modes validate or call only their declared sources instead of falling back silently: `general` queries DuckDuckGo, Brave, and Bing together, then uses direct reference/community providers when more coverage is needed; `code` uses direct GitHub, MDN, Docker Hub, and PyPI providers; `academic` uses direct arXiv, Crossref, OpenAlex, and Semantic Scholar providers; `news` uses Reuters, Bing News, and DuckDuckGo News through SearXNG; `reference` uses direct Wikipedia and Wikidata providers; `community` uses direct Hacker News; `private` avoids broad general web engines.
 
-Ordinary `/search` and `mode=general` balance query-term coverage with engine agreement, source priors, and upstream position. Scores are ranking heuristics, not probabilities of correctness. Query matching improves some irrelevant-result failures but does not establish that a result answers the question. Upstream blocks remain visible even when another engine supplies results.
+Ordinary `/search` and `mode=general` balance query-term coverage with engine agreement, source priors, and upstream position. Documentation queries prioritize matching page titles and relevant hostnames over homepages and search listings; this is a ranking signal, not proof that a site is official. Scores are ranking heuristics, not probabilities of correctness. Query matching improves some irrelevant-result failures but does not establish that a result answers the question. Upstream blocks remain visible even when another engine supplies results.
+
+Academic search constructs quoted title and explicit keyword queries for arXiv
+(or an identifier lookup for an arXiv ID), and bibliographic queries for Crossref.
+Ranking uses titles and authors, with small capped citation and provider-agreement
+signals. Provider call order does not give earlier sources a ranking advantage,
+and provider diversity cannot displace a more relevant paper. Matching DOI and
+arXiv identifiers merge duplicate records; identical titles alone do not.
+Author names remain visible in result snippets. Provider rate limits can still
+reduce coverage; inspect `meta.engine_attempts` before interpreting an empty result.
 
 In `mode=code`, explicit Python package or PyPI lookups preserve exact package
 matches ahead of provider diversity. Other code and academic results still need

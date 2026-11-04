@@ -44,6 +44,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.cache import Cache
 from app.content_cache import ContentCache
 from app.dedup import deduplicate_with_scoring
+from app.scholarly import rank_academic
 from app.killchain import kill_chain, kill_chain_batch
 from app.query_expansion import generate_query_variations
 from app.evolver import Evolver
@@ -941,14 +942,16 @@ async def _search_strategy_impl(
         upstream_responses.append(upstream)
         combined_raw.extend(upstream.results)
         pack_results = _filter_search_results(
-            deduplicate_with_scoring(upstream.results, query=q if normalized_mode == "general" else None),
+            (rank_academic(upstream.results, query=q) if normalized_mode == "academic" else
+             deduplicate_with_scoring(upstream.results, query=q if normalized_mode == "general" else None)),
             domain=domain,
             exclude_domains=exclude_domains,
         )
         if pack_results:
             coverage_groups.append(pack_results)
         current_results = _filter_search_results(
-            deduplicate_with_scoring(combined_raw, query=q if normalized_mode == "general" else None),
+            (rank_academic(combined_raw, query=q) if normalized_mode == "academic" else
+             deduplicate_with_scoring(combined_raw, query=q if normalized_mode == "general" else None)),
             domain=domain,
             exclude_domains=exclude_domains,
         )
@@ -989,7 +992,8 @@ async def _search_strategy_impl(
             fallback_reason = "no_results" if not upstream.results else "insufficient_results"
 
     ranked_results = _filter_search_results(
-        deduplicate_with_scoring(combined_raw, query=q if normalized_mode == "general" else None),
+        (rank_academic(combined_raw, query=q) if normalized_mode == "academic" else
+         deduplicate_with_scoring(combined_raw, query=q if normalized_mode == "general" else None)),
         domain=domain,
         exclude_domains=exclude_domains,
     )
@@ -1005,7 +1009,8 @@ async def _search_strategy_impl(
     preferred_keys = {_result_key(r) for r in preferred}
     remaining = [r for r in ranked_results if _result_key(r) not in preferred_keys]
     groups = [[r for r in group if _result_key(r) not in preferred_keys] for group in coverage_groups]
-    results = preferred + _ensure_strategy_coverage(remaining, groups, count - len(preferred))
+    results = (ranked_results[:count] if normalized_mode == "academic" else
+               preferred + _ensure_strategy_coverage(remaining, groups, count - len(preferred)))
     _renumber_results(results)
 
     if fetch:

@@ -163,6 +163,9 @@ def deduplicate_with_scoring(raw_results: list[dict], *, query: str | None = Non
     positive_query = ' '.join(positive_words)
     stop_words = {'a', 'an', 'the', 'and', 'or', 'of', 'to', 'in', 'for', 'on', 'with', 'is', 'are'}
     query_terms = set(re.findall(r'[^\W_]+', positive_query.casefold())) - stop_words
+    documentation_intent = bool(query_terms & {'documentation', 'docs', 'manual'})
+    if documentation_intent:
+        query_terms -= {'documentation', 'docs', 'manual', 'official'}
     seen: dict[str, dict] = {}
     
     for i, r in enumerate(raw_results):
@@ -220,7 +223,21 @@ def deduplicate_with_scoring(raw_results: list[dict], *, query: str | None = Non
             text = f"{item['title']} {unquote(item['url'])} {item['snippet']}"
             result_terms = set(re.findall(r'[^\W_]+', text.casefold()))
             coverage = len(query_terms & result_terms) / len(query_terms)
-            final_score = 0.6 * coverage + 0.4 * final_score
+            if documentation_intent:
+                title_terms = set(re.findall(r'[^\W_]+', item['title'].casefold()))
+                title_coverage = len(query_terms & title_terms) / len(query_terms)
+                # A narrow lexical hostname signal, never an authenticity verdict.
+                # Only recognize simple suffixes; do not reward arbitrary subdomains.
+                labels = normalize_hostname(item['url']).split('.')
+                domain_match = (len(labels) >= 2 and labels[-1] in {'com', 'org', 'net', 'io', 'dev', 'edu'}
+                                and labels[-2] in query_terms)
+                final_score = (.45 * title_coverage + .25 * coverage
+                               + .2 * float(domain_match) + .1 * final_score)
+                path = urlparse(item['url']).path.rstrip('/').casefold()
+                if path in {'', '/index.html', '/index.htm', '/search', '/search.html'}:
+                    final_score *= .8
+            else:
+                final_score = 0.6 * coverage + 0.4 * final_score
         
         results.append(
             SearchResult(
