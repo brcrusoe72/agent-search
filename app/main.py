@@ -611,18 +611,34 @@ def _split_engine_list(value: str) -> list[str]:
     return [engine.strip() for engine in value.split(",") if engine.strip()]
 
 
+def _searxng_object_list(resp, key: str) -> tuple[dict, list[dict]]:
+    """Treat malformed upstream JSON as a gateway failure, not an API crash."""
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        raise httpx.DecodingError("Invalid SearXNG JSON response") from exc
+    if not isinstance(data, dict) or not isinstance(data.get(key), list):
+        raise httpx.DecodingError(f"Invalid SearXNG {key} response")
+    rows = data[key]
+    if any(not isinstance(row, dict) for row in rows):
+        raise httpx.DecodingError(f"Invalid SearXNG {key} entry")
+    return data, rows
+
+
 async def _enabled_engine_catalog() -> dict[str, EngineDescriptor]:
     """Return enabled engines keyed by normalized name and shortcut."""
     assert http_client is not None
 
     resp = await http_client.get(f"{SEARXNG_URL}/config", timeout=5.0)
     resp.raise_for_status()
-    data = resp.json()
+    _, engines = _searxng_object_list(resp, "engines")
 
     catalog: dict[str, EngineDescriptor] = {}
-    for engine in data.get("engines", []):
+    for engine in engines:
         if not engine.get("enabled", False):
             continue
+        if not isinstance(engine.get("categories", []), list):
+            raise httpx.DecodingError("Invalid SearXNG engine categories")
         name = str(engine.get("name", "")).strip()
         if not name:
             continue
@@ -709,11 +725,15 @@ async def _query_searxng(
         request_kwargs["timeout"] = timeout
     resp = await http_client.get(f"{SEARXNG_URL}/search", **request_kwargs)
     resp.raise_for_status()
-    data = resp.json()
+    data, results = _searxng_object_list(resp, "results")
+    for result in results:
+        if any(key in result and not isinstance(result[key], str)
+               for key in ("url", "title", "content", "snippet")):
+            raise httpx.DecodingError("Invalid SearXNG result text field")
     unresponsive_engines, upstream_errors = _normalize_upstream_diagnostics(data)
     upstream_status = "degraded" if unresponsive_engines or upstream_errors else "ok"
     return SearxngQueryResponse(
-        results=data.get("results", [])[:count * 3],
+        results=results[:count * 3],
         upstream_status=upstream_status,
         upstream_errors=upstream_errors,
         unresponsive_engines=unresponsive_engines,
@@ -973,7 +993,20 @@ async def _search_strategy_impl(
         domain=domain,
         exclude_domains=exclude_domains,
     )
-    results = _ensure_strategy_coverage(ranked_results, coverage_groups, count)
+    # An explicit Python package lookup should not lose its exact registry
+    # result just to make room for a less relevant provider's first hit.
+    package_tokens = set(re.findall(r"[a-z0-9][a-z0-9_.-]*", q.casefold()))
+    package_lookup = normalized_mode == "code" and (
+        "pypi" in package_tokens or ("python" in package_tokens and "package" in package_tokens)
+    )
+    preferred = [r for r in ranked_results if package_lookup and "pypi" in r.engines
+                 and r.title.casefold() in package_tokens
+                 and _result_hostname(r.url) == "pypi.org"][:count]
+    preferred_keys = {_result_key(r) for r in preferred}
+    remaining = [r for r in ranked_results if _result_key(r) not in preferred_keys]
+    groups = [[r for r in group if _result_key(r) not in preferred_keys] for group in coverage_groups]
+    results = preferred + _ensure_strategy_coverage(remaining, groups, count - len(preferred))
+    _renumber_results(results)
 
     if fetch:
         await _attach_content(results)
@@ -999,7 +1032,9 @@ async def _search_strategy_impl(
         ),
     )
 
-    cache.set(q, cache_engines, count, response, cache_domain, cache_exclude_domains, fetch)
+    # An outage must not hide recovery for the normal one-hour result TTL.
+    if response.results or response.meta.upstream_status == "ok":
+        cache.set(q, cache_engines, count, response, cache_domain, cache_exclude_domains, fetch)
     return response
 
 
@@ -1086,7 +1121,8 @@ async def search(
         ),
     )
 
-    cache.set(q, resolved_engines, count, response, cache_domain, cache_exclude_domains, fetch)
+    if response.results or response.meta.upstream_status == "ok":
+        cache.set(q, resolved_engines, count, response, cache_domain, cache_exclude_domains, fetch)
     return response
 
 

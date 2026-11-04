@@ -1,6 +1,8 @@
 ARG PYTHON_BASE_IMAGE=python@sha256:9e01bf1ae5db7649a236da7be1e94ffbbbdd7a93f867dd0d8d5720d9e1f89fab
 FROM ${PYTHON_BASE_IMAGE}
 
+RUN python -m pip install --no-cache-dir --upgrade pip==26.3
+
 LABEL io.modelcontextprotocol.server.name="io.github.brcrusoe72/agent-search"
 
 WORKDIR /app

@@ -1,0 +1,88 @@
+[
+  {
+    "id": "web-python",
+    "mode": "general",
+    "query": "Python asyncio TaskGroup documentation",
+    "target": {
+      "host": "docs.python.org",
+      "path": "/library/asyncio-task.html"
+    }
+  },
+  {
+    "id": "web-sqlite",
+    "mode": "general",
+    "query": "SQLite write ahead logging documentation",
+    "target": {
+      "host": "sqlite.org",
+      "path": "/wal.html"
+    }
+  },
+  {
+    "id": "code-fetch",
+    "mode": "code",
+    "query": "fetch API",
+    "target": {
+      "host": "developer.mozilla.org",
+      "path": "/Web/API/Fetch_API"
+    }
+  },
+  {
+    "id": "code-requests",
+    "mode": "code",
+    "query": "requests Python package",
+    "target": {
+      "host": "pypi.org",
+      "path": "/project/requests/"
+    }
+  },
+  {
+    "id": "academic-attention",
+    "mode": "academic",
+    "query": "Attention Is All You Need",
+    "targets": [
+      {
+        "host": "arxiv.org",
+        "path": "/abs/1706.03762"
+      },
+      {
+        "host": "arxiv.org",
+        "path": "/pdf/1706.03762"
+      },
+      {
+        "host": "doi.org",
+        "path": "/10.48550/arxiv.1706.03762"
+      }
+    ]
+  },
+  {
+    "id": "academic-forest",
+    "mode": "academic",
+    "query": "Random Forests Leo Breiman",
+    "targets": [
+      {
+        "host": "doi.org",
+        "path": "/10.1023/a:1010933404324"
+      },
+      {
+        "host": "link.springer.com",
+        "path": "/article/10.1023/a:1010933404324"
+      }
+    ]
+  },
+  {
+    "id": "news-nasa",
+    "mode": "news",
+    "query": "NASA",
+    "topic_terms": [
+      "nasa"
+    ]
+  },
+  {
+    "id": "news-climate",
+    "mode": "news",
+    "query": "climate change",
+    "topic_terms": [
+      "climate"
+    ]
+  }
+]
