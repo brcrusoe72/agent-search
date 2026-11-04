@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import asyncio
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -484,6 +485,21 @@ class ArxivProvider(SearchProvider):
         resp.raise_for_status()
         root = ET.fromstring(resp.text)
         ns = {"atom": "http://www.w3.org/2005/Atom"}
+        if not root.findall("atom:entry", ns) and "id_list" not in arxiv_query(query):
+            # Keep exact title discovery separate from broader keyword retrieval:
+            # OR-combining them can bury the exact paper before local ranking.
+            # arXiv asks clients to leave at least three seconds between calls.
+            await asyncio.sleep(3)
+            resp = await client.get(
+                "https://export.arxiv.org/api/query",
+                params={**arxiv_query(query, title_only=False), "start": 0,
+                        "max_results": min(max(count * 3, 1), 50),
+                        "sortBy": "relevance", "sortOrder": "descending"},
+                headers={**DEFAULT_PROVIDER_HEADERS, "Accept": "application/atom+xml"},
+                timeout=self.timeout,
+            )
+            resp.raise_for_status()
+            root = ET.fromstring(resp.text)
         results: list[dict] = []
         for entry in root.findall("atom:entry", ns)[: count * 3]:
             title = entry.findtext("atom:title", default="", namespaces=ns)

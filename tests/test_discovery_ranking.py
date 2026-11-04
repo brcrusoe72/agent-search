@@ -16,7 +16,8 @@ def paper(title, url, engine, **metadata):
 def test_arxiv_title_is_quoted_and_every_keyword_scoped():
     query = arxiv_query('Attention Is All You Need')["search_query"]
     assert 'ti:"Attention Is All You Need"' in query
-    assert 'all:"Attention" AND all:"All" AND all:"You" AND all:"Need"' in query
+    keywords = arxiv_query('Attention Is All You Need', title_only=False)["search_query"]
+    assert keywords == 'all:"Attention" AND all:"All" AND all:"You" AND all:"Need"'
     injected = arxiv_query('attention" OR cat:cs.AI)')["search_query"]
     assert 'cat:cs.AI' not in injected
     assert injected.count('"') % 2 == 0
@@ -121,4 +122,31 @@ def test_arxiv_preserves_authors_and_identifier():
             response = await ArxivProvider().search(client, "A paper", 3)
         assert response.results[0]["authors"] == ["Ashish Vaswani"]
         assert response.results[0]["url"].endswith("1706.03762")
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("query,first_status,first_body,expected_calls", [
+    ("transformer attention", 200, '<feed xmlns="http://www.w3.org/2005/Atom"/>', 2),
+    ("1706.03762", 200, '<feed xmlns="http://www.w3.org/2005/Atom"/>', 1),
+    ("transformer attention", 429, 'rate limited', 1),
+])
+def test_arxiv_keyword_fallback_is_bounded_and_does_not_retry_rate_limits(monkeypatch, query, first_status, first_body, expected_calls):
+    calls, pauses = [], []
+    async def pause(seconds):
+        pauses.append(seconds)
+    monkeypatch.setattr('app.search_providers.asyncio.sleep', pause)
+    def handle(request):
+        calls.append(dict(request.url.params))
+        return httpx.Response(first_status if len(calls) == 1 else 200,
+                              text=first_body if len(calls) == 1 else '<feed xmlns="http://www.w3.org/2005/Atom"/>')
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            response = await ArxivProvider().search(client, query, 3)
+        assert len(calls) == expected_calls
+        assert pauses == ([3] if expected_calls == 2 else [])
+        if expected_calls == 2:
+            assert calls[0]["search_query"] == 'ti:"transformer attention"'
+            assert calls[1]["search_query"] == 'all:"transformer" AND all:"attention"'
+        if first_status == 429:
+            assert response.upstream_status == "error"
     asyncio.run(run())

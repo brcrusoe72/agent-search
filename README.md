@@ -231,8 +231,9 @@ Modes validate or call only their declared sources instead of falling back silen
 
 Ordinary `/search` and `mode=general` balance query-term coverage with engine agreement, source priors, and upstream position. Documentation queries prioritize matching page titles and relevant hostnames over homepages and search listings; this is a ranking signal, not proof that a site is official. Scores are ranking heuristics, not probabilities of correctness. Query matching improves some irrelevant-result failures but does not establish that a result answers the question. Upstream blocks remain visible even when another engine supplies results.
 
-Academic search constructs quoted title and explicit keyword queries for arXiv
-(or an identifier lookup for an arXiv ID), and bibliographic queries for Crossref.
+Academic search tries a quoted title query for arXiv, then one explicit keyword
+query if the title lookup is empty, with a three-second pause between calls.
+An arXiv ID uses a direct identifier lookup. Crossref uses bibliographic queries.
 Ranking uses titles and authors, with small capped citation and provider-agreement
 signals. Provider call order does not give earlier sources a ranking advantage,
 and provider diversity cannot displace a more relevant paper. Matching DOI and

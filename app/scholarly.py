@@ -16,7 +16,7 @@ def words(text: str) -> set[str]:
     return set(re.findall(r"[^\W_]+", text.casefold())) - _STOP
 
 
-def arxiv_query(query: str) -> dict[str, str]:
+def arxiv_query(query: str, *, title_only: bool = True) -> dict[str, str]:
     """Treat input as text, not executable arXiv query syntax; preserve exact IDs."""
     identifier = query.strip().removeprefix("arXiv:").removeprefix("arxiv:")
     parsed = urlparse(identifier)
@@ -28,7 +28,7 @@ def arxiv_query(query: str) -> dict[str, str]:
     phrase = " ".join(tokens)
     terms = [token for token in tokens if token.casefold() not in _STOP] or tokens
     conjunction = " AND ".join(f'all:"{token}"' for token in terms)
-    return {"search_query": f'(ti:"{phrase}" OR ({conjunction}))' if tokens else 'ti:""'}
+    return {"search_query": f'ti:"{phrase}"' if title_only or not tokens else conjunction}
 
 
 def _identities(row: dict) -> set[str]:
