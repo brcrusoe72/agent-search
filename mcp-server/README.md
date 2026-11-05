@@ -27,7 +27,7 @@ change the running system.
 | `providers_health` | Summarize provider health from recorded live attempts |
 | `providers_stats` | Return rolling provider/SearXNG attempt telemetry |
 | `search` | SearXNG-backed web search with engine/mode, domain, exclusion, and extraction controls |
-| `search_strategy` | Named mode search: general, code, academic, news, private, reference, community |
+| `search_strategy` | Named mode search: general, browser, code, academic, news, private, reference, community |
 | `search_extract` | Search and extract readable content from top results |
 | `deep_search` | Multi-query fusion — generates 3-5 query variations and merges results |
 | `policy_search` | Policy/geopolitical search with source-library and domain-quality ranking |

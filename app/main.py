@@ -51,7 +51,7 @@ from app.evolver import Evolver
 from app.fetch_security import SafeAsyncHTTPTransport
 from app.source_tracer import trace_sources, get_institution_registry
 from app.database import query_db
-from app.search_providers import provider_by_name, providers_catalog
+from app.search_providers import browser_discovery_available, provider_by_name, providers_catalog
 from app.models import (
     AdaptReportRequest,
     AdaptStatsResponse,
@@ -349,10 +349,12 @@ def _provider_pack(provider: str, label: str | None = None) -> SearchStrategyPac
 SEARCH_STRATEGY_MODES: dict[str, tuple[SearchStrategyPack, ...]] = {
     "general": (
         _searxng_pack("duckduckgo", "brave", "bing"),
+        _provider_pack("browser"),
         _provider_pack("wikipedia", "wikipedia"),
         _provider_pack("wikidata", "wikidata"),
         _provider_pack("hackernews", "hackernews"),
     ),
+    "browser": (_provider_pack("browser"),),
     "code": (
         _provider_pack("github", "github"),
         _provider_pack("mdn", "mdn"),
@@ -904,11 +906,19 @@ async def _search_strategy_impl(
     fallback_reason: str | None = None
 
     for index, pack in enumerate(SEARCH_STRATEGY_MODES[normalized_mode]):
+        if normalized_mode == "general" and pack.provider == "browser" and not browser_discovery_available():
+            continue
         engine_selection = None
+        catalog_error = None
         if pack.source == "searxng":
-            engine_selection = await _resolve_engine_selection(",".join(pack.engines))
+            try:
+                engine_selection = await _resolve_engine_selection(",".join(pack.engines))
+            except HTTPException as exc:
+                if normalized_mode != "general" or exc.status_code != 502 or not browser_discovery_available():
+                    raise
+                catalog_error = exc
         query_text = q
-        if domain and pack.source == "searxng":
+        if domain and (pack.source == "searxng" or pack.provider == "browser"):
             include_domain = _normalize_domain_filter(domain)
             if include_domain and _supports_site_search(engine_selection):
                 query_text = _domain_scoped_query(q, include_domain)
@@ -921,12 +931,17 @@ async def _search_strategy_impl(
                 raise HTTPException(status_code=500, detail=f"Strategy pack '{pack.label or pack.source}' has no provider")
             assert http_client is not None
             provider = provider_by_name(pack.provider)
-            upstream = await provider.search(http_client, query_text, count * 2)
+            if pack.provider == "browser":
+                upstream = await provider.search(http_client, query_text, count, domain=domain, exclude_domains=exclude_domains)
+            else:
+                upstream = await provider.search(http_client, query_text, count * 2)
             provider_name = upstream.provider
         elif pack.source == "searxng":
-            if engine_selection is None:
+            if engine_selection is None and catalog_error is None:
                 raise HTTPException(status_code=500, detail=f"Strategy pack '{pack.label or pack.source}' has no engines")
             try:
+                if catalog_error:
+                    raise httpx.ConnectError(str(catalog_error.detail))
                 upstream = await _query_searxng(
                     query_text,
                     count * 2,
@@ -952,7 +967,7 @@ async def _search_strategy_impl(
         combined_raw.extend(ranking_raw)
         pack_results = _filter_search_results(
             (rank_academic(ranking_raw, query=q) if normalized_mode == "academic" else
-             deduplicate_with_scoring(upstream.results, query=q if normalized_mode == "general" else None)),
+             deduplicate_with_scoring(upstream.results, query=q if normalized_mode in {"general", "browser"} else None)),
             domain=domain,
             exclude_domains=exclude_domains,
         )
@@ -960,7 +975,7 @@ async def _search_strategy_impl(
             coverage_groups.append(pack_results)
         current_results = _filter_search_results(
             (rank_academic(combined_raw, query=q) if normalized_mode == "academic" else
-             deduplicate_with_scoring(combined_raw, query=q if normalized_mode == "general" else None)),
+             deduplicate_with_scoring(combined_raw, query=q if normalized_mode in {"general", "browser"} else None)),
             domain=domain,
             exclude_domains=exclude_domains,
         )
@@ -993,6 +1008,7 @@ async def _search_strategy_impl(
             "upstream_status": upstream.upstream_status,
             "upstream_errors": upstream.upstream_errors or [],
             "unresponsive_engines": upstream.unresponsive_engines or [],
+            **({"browser_attempts": upstream.attempts} if pack.provider == "browser" else {}),
         })
 
         if normalized_mode == "general" and len(current_results) >= count:
@@ -1002,7 +1018,7 @@ async def _search_strategy_impl(
 
     ranked_results = _filter_search_results(
         (rank_academic(combined_raw, query=q) if normalized_mode == "academic" else
-         deduplicate_with_scoring(combined_raw, query=q if normalized_mode == "general" else None)),
+         deduplicate_with_scoring(combined_raw, query=q if normalized_mode in {"general", "browser"} else None)),
         domain=domain,
         exclude_domains=exclude_domains,
     )
@@ -1061,7 +1077,7 @@ async def search(
     q: str = Query(..., description="Search query"),
     count: int = Query(10, ge=1, le=50, description="Number of results"),
     engines: str | None = Query(None, description="Comma-separated engine names"),
-    mode: str | None = Query(None, description="Named strategy: general, code, academic, news, private, reference, or community"),
+    mode: str | None = Query(None, description="Named strategy: general, browser, code, academic, news, private, reference, or community"),
     domain: str | None = Query(None, description="Filter results to this domain"),
     exclude_domains: str | None = Query(None, description="Comma-separated domains to exclude"),
     fetch: bool = Query(False, description="Fetch page content via kill chain"),
@@ -1102,16 +1118,40 @@ async def search(
         if include_domain and _supports_site_search(engine_selection):
             query_text = _domain_scoped_query(q, include_domain)
 
+    searx_error = None
     try:
         upstream = await _query_searxng(query_text, count * 2, resolved_engines or None)
     except httpx.HTTPError as e:
-        _record_searxng_error_attempt(resolved_engines or "default", e, start)
-        raise HTTPException(status_code=502, detail=f"SearXNG error: {e}")
+        if engines or not browser_discovery_available():
+            _record_searxng_error_attempt(resolved_engines or "default", e, start)
+            raise HTTPException(status_code=502, detail=f"SearXNG error: {e}")
+        searx_error = e
+        upstream = _upstream_error_response(e)
 
     _record_searxng_attempt(resolved_engines or "default", upstream)
 
     results = deduplicate_with_scoring(upstream.results, query=q)
     results = _filter_search_results(results, domain=domain, exclude_domains=exclude_domains)[:count]
+    upstream_responses = [upstream]
+    browser_attempts = []
+    fallback_reason = None
+    if not engines and len(results) < count and browser_discovery_available():
+        fallback_reason = "no_results" if not results else "insufficient_results"
+        browser = await provider_by_name("browser").search(http_client, query_text, count,
+                                                            domain=domain, exclude_domains=exclude_domains)
+        upstream_responses.append(browser)
+        _record_provider_attempt(source="provider", name="browser", raw_results=len(browser.results),
+                                 upstream_status=browser.upstream_status, response_time_ms=browser.response_time_ms,
+                                 upstream_errors=browser.upstream_errors)
+        browser_attempts = [{"source": "provider", "provider": "browser", "query": query_text,
+                             "raw_results": len(browser.results), "upstream_status": browser.upstream_status,
+                             "upstream_errors": browser.upstream_errors, "browser_attempts": browser.attempts}]
+        results = _filter_search_results(deduplicate_with_scoring(upstream.results + browser.results, query=q),
+                                         domain=domain, exclude_domains=exclude_domains)[:count]
+    if searx_error and not results:
+        raise HTTPException(status_code=502, detail={"message": "Search and browser discovery failed",
+                                                     "upstream_errors": _upstream_metadata(*upstream_responses)["upstream_errors"],
+                                                     "engine_attempts": browser_attempts})
 
     # Fetch content via kill chain if requested
     if fetch and results:
@@ -1131,7 +1171,9 @@ async def search(
             cached=False,
             response_time_ms=elapsed,
             queries_used=[query_text] if query_text != q else None,
-            **_upstream_metadata(upstream),
+            engine_attempts=browser_attempts,
+            fallback_reason=fallback_reason,
+            **_upstream_metadata(*upstream_responses),
         ),
     )
 
@@ -1143,7 +1185,7 @@ async def search(
 @app.get("/search/strategy", response_model=SearchResponse)
 async def search_strategy(
     q: str = Query(..., description="Search query"),
-    mode: str = Query("general", description="Named strategy: general, code, academic, news, private, reference, or community"),
+    mode: str = Query("general", description="Named strategy: general, browser, code, academic, news, private, reference, or community"),
     count: int = Query(10, ge=1, le=50, description="Number of results"),
     domain: str | None = Query(None, description="Filter results to this domain"),
     exclude_domains: str | None = Query(None, description="Comma-separated domains to exclude"),
@@ -1165,7 +1207,7 @@ async def search_extract(
     q: str = Query(..., description="Search query"),
     count: int = Query(5, ge=1, le=20, description="Number of results"),
     engines: str | None = Query(None, description="Comma-separated engine names"),
-    mode: str | None = Query(None, description="Named strategy: general, code, academic, news, private, reference, or community"),
+    mode: str | None = Query(None, description="Named strategy: general, browser, code, academic, news, private, reference, or community"),
 ) -> SearchResponse:
     """Search and extract content from top results via kill chain."""
     return await search(q=q, count=count, engines=engines, mode=mode, domain=None, exclude_domains=None, fetch=True)

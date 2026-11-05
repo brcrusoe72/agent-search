@@ -157,7 +157,7 @@ See each repository for installation instructions and documentation.
 | Endpoint | Method | What it does |
 |---|---|---|
 | `/search` | GET | Multi-engine web search with deduplication and scoring |
-| `/search/strategy` | GET | Named search modes: general, code, academic, news, private, reference, community |
+| `/search/strategy` | GET | Named search modes: general, browser, code, academic, news, private, reference, community |
 | `/search/deep` | GET | Server-side query expansion — runs variations in parallel, fuses results |
 | `/search/extract` | GET | Search + inline content extraction in one call |
 | `/search/jobs` | GET | Job search across LinkedIn, Indeed, Glassdoor, ZipRecruiter |
@@ -227,7 +227,7 @@ curl "http://localhost:3939/search?q=AI+regulation&mode=academic&count=5"
 curl "http://localhost:3939/search?q=Python&mode=reference&count=5"
 ```
 
-Modes validate or call only their declared sources instead of falling back silently: `general` queries DuckDuckGo, Brave, and Bing together, then uses direct reference/community providers when more coverage is needed; `code` uses direct GitHub, MDN, Docker Hub, and PyPI providers; `academic` uses direct arXiv, Crossref, OpenAlex, and Semantic Scholar providers; `news` uses Reuters, Bing News, and DuckDuckGo News through SearXNG; `reference` uses direct Wikipedia and Wikidata providers; `community` uses direct Hacker News; `private` avoids broad general web engines.
+Modes validate or call only their declared sources instead of falling back silently: `general` queries DuckDuckGo, Brave, and Bing together, then tries browser discovery when results are insufficient, followed by direct reference/community providers if needed; `code` uses direct GitHub, MDN, Docker Hub, and PyPI providers; `academic` uses direct arXiv, Crossref, OpenAlex, and Semantic Scholar providers; `news` uses Reuters, Bing News, and DuckDuckGo News through SearXNG; `reference` uses direct Wikipedia and Wikidata providers; `community` uses direct Hacker News; `private` avoids broad general web engines.
 
 Ordinary `/search` and `mode=general` balance query-term coverage with engine agreement, source priors, and upstream position. Documentation queries prioritize matching page titles and relevant hostnames over homepages and search listings; this is a ranking signal, not proof that a site is official. Scores are ranking heuristics, not probabilities of correctness. Query matching improves some irrelevant-result failures but does not establish that a result answers the question. Upstream blocks remain visible even when another engine supplies results.
 
@@ -245,6 +245,34 @@ In `mode=code`, explicit Python package or PyPI lookups preserve exact package
 matches ahead of provider diversity. Other code and academic results still need
 relevance review. Empty responses caused by upstream errors are not cached for
 the normal result TTL, so the next request can observe recovery.
+
+Browser discovery uses the existing sandboxed Chromium worker to read public
+DuckDuckGo search pages, then Bing if more results are needed. It needs no paid
+API, subscription, or API key. It is automatically available when
+`BROWSER_SERVICE_URL` is configured; set `BROWSER_DISCOVERY_ENABLED=0` on the API
+to disable it. Ordinary `/search` and `mode=general` invoke it when the initial
+web results are fewer than requested or SearXNG is unavailable. Explicit
+`engines=` requests and specialized/private modes keep their declared sources.
+Use `mode=browser` to search through the browser directly, independently of
+SearXNG:
+
+```bash
+curl "http://localhost:3939/search?q=SQLite+write+ahead+logging+documentation&mode=browser&count=3"
+```
+
+Each browser search visits at most two search pages (up to 20 results per page),
+with a bounded worker deadline and a shared browser concurrency limit. It
+extracts organic result cards, decodes tracking URLs, validates destinations,
+and applies domain exclusions before ranking. The browser keeps its sandbox,
+validating proxy and network isolation. Generic page rendering still blocks
+search-engine URLs; only the dedicated search path can visit its two fixed
+search endpoints. It does not log in or solve challenges. Blocks, empty pages,
+timeouts and temporary cooldowns remain visible in `meta.engine_attempts` under
+`browser_attempts`; SearXNG errors remain visible even after successful recovery.
+There are no vendor query credits, but external sites may still restrict traffic.
+The normal result cache prevents repeated successful searches; empty failures
+are not cached for the normal result TTL. This feature does not build a local
+web index or crawl every result page. Use `fetch=true` to extract returned pages.
 
 Each strategy response includes `meta.engine_attempts` with source/provider, query, raw result count, latency, and upstream errors so blocked or empty providers stay visible.
 

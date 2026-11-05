@@ -78,7 +78,7 @@ results = client.search("site reliability", domain="google.com")
 
 ### `client.search_strategy(query, *, mode="general", count=10, domain=None, exclude_domains=None, fetch=False)`
 
-Named strategy search. Modes are `general`, `code`, `academic`, `news`, `private`, `reference`, and `community`. Code, academic, reference, and community modes use direct no-key providers where available, while broad web/news engines still run through the configured AgentSearch/SearXNG stack. Reddit remains best-effort and is not selected by default because live anonymous requests are often blocked.
+Named strategy search. Modes are `general`, `browser`, `code`, `academic`, `news`, `private`, `reference`, and `community`. Code, academic, reference, and community modes use direct no-key providers where available, while broad web/news engines still run through the configured AgentSearch/SearXNG stack. Reddit remains best-effort and is not selected by default because live anonymous requests are often blocked.
 
 ```python
 results = client.search_strategy("fetch api", mode="code", count=5)

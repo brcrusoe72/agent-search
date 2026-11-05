@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import re
 import asyncio
+import json
+import os
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from html import unescape
 from typing import Any
-from urllib.parse import quote, urljoin
+from urllib.parse import quote, urljoin, urlparse
 
 import httpx
 
@@ -32,6 +34,7 @@ class ProviderResponse:
     upstream_errors: list[str] = field(default_factory=list)
     unresponsive_engines: list[str] = field(default_factory=list)
     response_time_ms: float = 0.0
+    attempts: list[dict] = field(default_factory=list)
 
 
 class SearchProvider:
@@ -606,7 +609,89 @@ class SemanticScholarProvider(SearchProvider):
         return results
 
 
+def browser_discovery_available() -> bool:
+    return (bool(os.getenv("BROWSER_SERVICE_URL", "").strip())
+            and os.getenv("BROWSER_DISCOVERY_ENABLED", "1").lower() not in {"0", "false", "no", "off"})
+
+
+async def browser_search_request(provider: str, query: str, count: int) -> dict:
+    """Call only the configured internal worker, with bounded time and bytes."""
+    async def request():
+        async with httpx.AsyncClient(timeout=20, trust_env=False) as client:
+            async with client.stream("POST", os.environ["BROWSER_SERVICE_URL"].rstrip("/") + "/search",
+                                     json={"provider": provider, "query": query, "count": min(count, 20)}) as response:
+                response.raise_for_status()
+                body = bytearray()
+                async for chunk in response.aiter_bytes():
+                    body.extend(chunk)
+                    if len(body) > 2_000_000:
+                        raise ValueError("Browser discovery response exceeds size limit")
+        data = json.loads(body)
+        if (not isinstance(data, dict) or not isinstance(data.get("success"), bool)
+                or not isinstance(data.get("search_results"), list)):
+            raise ValueError("Invalid browser discovery response")
+        for row in data["search_results"]:
+            if not isinstance(row, dict) or any(not isinstance(row.get(k), str) for k in ("url", "title", "content")):
+                raise ValueError("Invalid browser result")
+        return data
+    return await asyncio.wait_for(request(), timeout=20)
+
+
+class BrowserDiscoveryProvider(SearchProvider):
+    name = "browser"
+    engine_name = "browser"
+
+    @staticmethod
+    def _matches(url: str, domain: str) -> bool:
+        # Match the API's exact-host/subdomain semantics, including www.
+        raw = domain.strip().lower().strip(".")
+        expected = (urlparse(raw if "://" in raw else "//" + raw).hostname or raw).strip(".")
+        host = (urlparse(url).hostname or "").lower().strip(".")
+        return bool(host and expected and (host == expected or host.endswith("." + expected)))
+
+    async def search(self, client, query: str, count: int, *, domain: str | None = None,
+                     exclude_domains: str | None = None) -> ProviderResponse:
+        start = time.monotonic()
+        if not browser_discovery_available():
+            return ProviderResponse([], self.name, upstream_status="error",
+                                    upstream_errors=["Browser discovery is disabled or its worker is not configured"])
+        rows, errors, attempts = [], [], []
+        seen = set()
+        for provider in ("duckduckgo", "bing"):
+            began = time.monotonic()
+            provider_rows = []
+            error, reason = None, None
+            try:
+                data = await browser_search_request(provider, query, min(count * 2, 20))
+                if not data.get("success"):
+                    error = _safe_text(data.get("error") or "Browser search failed")
+                    reason = _safe_text(data.get("blocked_reason") or "upstream_error")
+                else:
+                    excluded = [d.strip() for d in (exclude_domains or "").split(",") if d.strip()]
+                    provider_rows = [dict(row, engines=["browser:" + provider]) for row in data["search_results"][:20]
+                                     if (not domain or self._matches(row["url"], domain))
+                                     and not any(self._matches(row["url"], d) for d in excluded)]
+            except Exception as exc:
+                error, reason = f"Browser worker request failed: {type(exc).__name__}", "service_error"
+            if error:
+                errors.append(f"browser:{provider}: {error}")
+            attempts.append({"provider": "browser:" + provider, "query": query,
+                             "raw_results": len(provider_rows), "upstream_status": "error" if error else "ok",
+                             "blocked_reason": reason, "error": error,
+                             "response_time_ms": round((time.monotonic() - began) * 1000, 1)})
+            for row in provider_rows:
+                if row["url"] not in seen:
+                    rows.append(row)
+                    seen.add(row["url"])
+            if len(rows) >= count:
+                break
+        return ProviderResponse(rows, self.name, upstream_status=("degraded" if rows else "error") if errors else "ok",
+                                upstream_errors=errors, attempts=attempts,
+                                response_time_ms=round((time.monotonic() - start) * 1000, 1))
+
+
 PROVIDERS: dict[str, SearchProvider] = {
+    "browser": BrowserDiscoveryProvider(),
     "mdn": MDNProvider(),
     "github": GitHubProvider(),
     "docker_hub": DockerHubProvider(),
