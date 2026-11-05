@@ -1,14 +1,14 @@
 """Browser discovery behavior: real API routing, parsing, restrictions and failures."""
 import asyncio
 import base64
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 
 import httpx
 import pytest
 from pydantic import ValidationError
 
 from app import browser_renderer, browser_search, browser_service, main, search_providers
-from tests.test_api import AppClient, isolated_app_state  # noqa: F401
+from tests.test_api import isolated_app_state  # noqa: F401
 
 
 GOOD = {"success": True, "search_results": [
