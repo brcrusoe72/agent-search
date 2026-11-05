@@ -109,7 +109,7 @@ def make_server(
                         "query": {"type": "string", "description": "Search query"},
                         "count": {"type": "integer", "description": "Number of results (default 10)", "default": 10},
                         "engines": {"type": "string", "description": "Comma-separated engine names"},
-                        "mode": {"type": "string", "description": "Named strategy: general, code, academic, news, private, reference, or community"},
+                        "mode": {"type": "string", "description": "Named strategy: general, browser, code, academic, news, private, reference, or community"},
                         "domain": {"type": "string", "description": "Restrict results to this domain"},
                         "exclude_domains": {"type": "string", "description": "Comma-separated domains to exclude"},
                         "fetch": {"type": "boolean", "description": "Also extract page content from top results", "default": False},
@@ -119,7 +119,7 @@ def make_server(
             ),
             Tool(
                 name="search_strategy",
-                description="Search with a named engine strategy. Modes: general, code, academic, news, private, reference, community.",
+                description="Search with a named engine strategy. Modes: general, browser, code, academic, news, private, reference, community.",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -142,7 +142,7 @@ def make_server(
                         "query": {"type": "string", "description": "Search query"},
                         "count": {"type": "integer", "description": "Number of results (default 5)", "default": 5},
                         "engines": {"type": "string", "description": "Comma-separated engine names"},
-                        "mode": {"type": "string", "description": "Named strategy: general, code, academic, news, private, reference, or community"},
+                        "mode": {"type": "string", "description": "Named strategy: general, browser, code, academic, news, private, reference, or community"},
                     },
                     "required": ["query"],
                 },

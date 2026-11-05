@@ -98,6 +98,7 @@ class BrowserRenderResult:
     render_time_ms: float = 0.0
     trust: TrustResult | None = None
     requested_trust: TrustResult | None = None
+    search_results: list[dict] = field(default_factory=list)
 
 
 def _hostname(url: str) -> str:
@@ -182,6 +183,7 @@ async def render_browser_page_local(
     max_chars: int | None = None,
     max_links: int | None = None,
     timeout_ms: int | None = None,
+    _search_provider: str | None = None,
 ) -> BrowserRenderResult:
     """Render a URL in an ephemeral browser context and extract text/links."""
     start = time.monotonic()
@@ -189,6 +191,7 @@ async def render_browser_page_local(
     effective_max_links = max_links if max_links is not None else BROWSER_RENDER_MAX_LINKS
     effective_timeout_ms = timeout_ms or BROWSER_RENDER_TIMEOUT_MS
     requested_trust = evaluate_trust(url, check_whois=False)
+    from app.browser_search import search_navigation_allowed, extract_search_results, search_challenge
 
     def _result(**kwargs: Any) -> BrowserRenderResult:
         final_url = str(kwargs.get("final_url") or "")
@@ -210,7 +213,9 @@ async def render_browser_page_local(
         return _result(error="Browser rendering is disabled", blocked_reason="disabled")
     if not is_safe_url(url, verbose=True):
         return _result(error="URL blocked by safety check", blocked_reason="unsafe_url")
-    blocked_reason = _blocked_browser_domain(url)
+    if _search_provider and not search_navigation_allowed(url, _search_provider):
+        return _result(error="Invalid discovery navigation", blocked_reason="invalid_search_url")
+    blocked_reason = _blocked_browser_domain(url) if not _search_provider else None
     if blocked_reason:
         return _result(error=blocked_reason, blocked_reason=blocked_reason)
 
@@ -247,6 +252,7 @@ async def render_browser_page_local(
                 locale="en-US",
                 timezone_id="UTC",
                 ignore_https_errors=False,
+                service_workers="block",
             )
             page = await context.new_page()
 
@@ -258,6 +264,11 @@ async def render_browser_page_local(
                     await route.abort()
                     return
                 request_url = request.url
+                if (_search_provider and request.is_navigation_request()
+                        and request.frame == page.main_frame
+                        and not search_navigation_allowed(request_url, _search_provider)):
+                    await route.abort()
+                    return
                 safe = safety_cache.get(request_url)
                 if safe is None:
                     safe = is_safe_url(request_url)
@@ -281,7 +292,10 @@ async def render_browser_page_local(
                     error="Rendered navigation ended at an unsafe URL",
                     blocked_reason="unsafe_final_url",
                 )
-            final_blocked_reason = _blocked_browser_domain(final_url)
+            if _search_provider and not search_navigation_allowed(final_url, _search_provider):
+                return _result(final_url=final_url, error="Discovery redirected outside the selected search page",
+                               blocked_reason="invalid_search_url")
+            final_blocked_reason = _blocked_browser_domain(final_url) if not _search_provider else None
             if final_blocked_reason:
                 return _result(
                     final_url=final_url,
@@ -311,7 +325,8 @@ async def render_browser_page_local(
                     blocked_reason="http_error",
                 )
 
-            challenge_detected = detect_browser_challenge(title, body_text, html)
+            challenge_detected = (search_challenge(title, body_text, html) if _search_provider else
+                                  detect_browser_challenge(title, body_text, html))
             if challenge_detected:
                 return _result(
                     final_url=final_url,
@@ -319,6 +334,13 @@ async def render_browser_page_local(
                     error="Challenge or block page detected; browser renderer will not bypass it",
                     challenge_detected=True,
                 )
+
+            if _search_provider:
+                rows = extract_search_results(html, _search_provider, effective_max_links)
+                return _result(final_url=final_url, title=title, success=bool(rows),
+                               search_results=rows, strategy="browser-search",
+                               error=None if rows else "No usable organic search results found",
+                               blocked_reason=None if rows else "no_results")
 
             raw_links = await page.evaluate(
                 """(maxLinks) => Array.from(document.links).slice(0, maxLinks * 3).map((a) => ({

@@ -355,7 +355,7 @@ class AgentSearch:
             query: Search query string.
             count: Number of results (1-50).
             engines: Comma-separated engine names.
-            mode: Named search strategy: general, code, academic, news, private, reference, or community.
+            mode: Named search strategy: general, browser, code, academic, news, private, reference, or community.
             domain: Filter results to this domain.
             exclude_domains: Comma-separated domains to exclude.
             fetch: If True, also extract page content via kill chain.
@@ -420,7 +420,7 @@ class AgentSearch:
             query: Search query string.
             count: Number of results (1-20).
             engines: Comma-separated engine names.
-            mode: Named search strategy: general, code, academic, news, private, reference, or community.
+            mode: Named search strategy: general, browser, code, academic, news, private, reference, or community.
 
         Returns:
             SearchResponse with results including extracted content.
