@@ -11,12 +11,11 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from html import unescape
 from typing import Any
-from urllib.parse import quote, urljoin
+from urllib.parse import quote, urljoin, urlparse
 
 import httpx
 
 from app.scholarly import arxiv_query
-from app.url_utils import hostname_matches, normalize_hostname
 
 
 DEFAULT_PROVIDER_HEADERS = {
@@ -642,6 +641,14 @@ class BrowserDiscoveryProvider(SearchProvider):
     name = "browser"
     engine_name = "browser"
 
+    @staticmethod
+    def _matches(url: str, domain: str) -> bool:
+        # Match the API's exact-host/subdomain semantics, including www.
+        raw = domain.strip().lower().strip(".")
+        expected = (urlparse(raw if "://" in raw else "//" + raw).hostname or raw).strip(".")
+        host = (urlparse(url).hostname or "").lower().strip(".")
+        return bool(host and expected and (host == expected or host.endswith("." + expected)))
+
     async def search(self, client, query: str, count: int, *, domain: str | None = None,
                      exclude_domains: str | None = None) -> ProviderResponse:
         start = time.monotonic()
@@ -660,11 +667,10 @@ class BrowserDiscoveryProvider(SearchProvider):
                     error = _safe_text(data.get("error") or "Browser search failed")
                     reason = _safe_text(data.get("blocked_reason") or "upstream_error")
                 else:
-                    include = normalize_hostname(domain) if domain else ""
-                    excluded = [normalize_hostname(d.strip()) for d in (exclude_domains or "").split(",") if d.strip()]
+                    excluded = [d.strip() for d in (exclude_domains or "").split(",") if d.strip()]
                     provider_rows = [dict(row, engines=["browser:" + provider]) for row in data["search_results"][:20]
-                                     if (not domain or hostname_matches(normalize_hostname(row["url"]), include))
-                                     and not any(hostname_matches(normalize_hostname(row["url"]), d) for d in excluded)]
+                                     if (not domain or self._matches(row["url"], domain))
+                                     and not any(self._matches(row["url"], d) for d in excluded)]
             except Exception as exc:
                 error, reason = f"Browser worker request failed: {type(exc).__name__}", "service_error"
             if error:

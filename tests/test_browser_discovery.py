@@ -184,6 +184,14 @@ def test_domain_filtering_happens_before_provider_stop_decision(monkeypatch, ena
     assert excluded.results == []
 
 
+def test_browser_domain_filters_agree_with_api_for_explicit_www():
+    matches = search_providers.BrowserDiscoveryProvider._matches
+    assert matches('https://www.sqlite.org/wal.html', 'www.sqlite.org')
+    assert not matches('https://sqlite.org/wal.html', 'www.sqlite.org')
+    assert matches('https://www.sqlite.org/wal.html', 'https://sqlite.org/')
+    assert not matches('https://sqlite.org.evil.test/wal.html', 'sqlite.org')
+
+
 @pytest.mark.parametrize("mode", [None, "general", "browser"])
 @pytest.mark.parametrize("failure", ["search", "catalog"])
 def test_api_recovers_from_searx_outage_and_caches_success(monkeypatch, enabled, mode, failure):
