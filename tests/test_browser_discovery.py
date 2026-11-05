@@ -65,6 +65,16 @@ def test_parser_ignores_navigation_ads_and_duplicate_results(monkeypatch):
     assert browser_search.extract_search_results(bing, "bing", 3)[0]["content"] == "Details"
 
 
+@pytest.mark.parametrize("url", ['https://learn.microsoft.com/en-us/dotnet/', 'https://support.microsoft.com/windows',
+                                 'https://blogs.bing.com/search/example', 'https://duckduckgo.com/duckduckgo-help-pages/'])
+def test_search_owner_documentation_is_not_discarded_as_navigation(monkeypatch, url):
+    monkeypatch.setattr(browser_search, "is_safe_url", lambda u: True)
+    for provider in ['bing', 'duckduckgo']:
+        assert browser_search.result_url(url, provider) == url
+    assert browser_search.result_url('https://www.bing.com/search?q=next', 'bing') is None
+    assert browser_search.result_url('https://html.duckduckgo.com/html/?q=next', 'duckduckgo') is None
+
+
 def test_search_about_captcha_is_not_itself_a_challenge():
     assert not browser_search.search_challenge("CAPTCHA research - Search", "captcha verify you are human",
                                               '<div class="result"><a class="result__a">CAPTCHA paper</a></div>')

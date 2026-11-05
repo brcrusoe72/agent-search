@@ -63,8 +63,9 @@ def result_url(href: str, provider: str) -> str | None:
             url = base64.b64decode(encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True).decode("utf-8")
         target = urlparse(url)
         host = (target.hostname or "").lower()
-        if any(host == domain or host.endswith("." + domain)
-               for domain in ("bing.com", "duckduckgo.com", "microsoft.com")):
+        if (host in {"bing.com", "www.bing.com", "duckduckgo.com", "www.duckduckgo.com", "html.duckduckgo.com"}
+                and target.path.rstrip("/") in {"", "/search", "/html", "/l", "/ck/a", "/images/search",
+                                                 "/videos/search", "/news/search", "/copilotsearch", "/feedback.html"}):
             return None
         if len(url) > 4096 or target.scheme not in {"http", "https"} or target.username or target.password:
             return None
