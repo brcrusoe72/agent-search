@@ -1,7 +1,7 @@
 fastapi==0.162.0
 uvicorn[standard]==0.54.0
 httpx[socks]==0.28.1
-pydantic==2.14.2
+pydantic==2.14.3
 beautifulsoup4==4.15.0
 pdfplumber>=0.11.4,<0.12
 lxml==6.1.3
