@@ -53,9 +53,9 @@ python3 -m venv .venv-mcp
 .venv-mcp/bin/agent-search-mcp --help
 ```
 
-This applies the declared `mcp>=1.27.2,<2.3.0` and HTTPX dependency bounds.
+This applies the declared `mcp>=1.27.2,<2.4.0` and HTTPX dependency bounds.
 Keep this environment separate from the API's dependencies. CI checks MCP
-1.27.2 and 2.2.0, including real stdio tool discovery and invocation.
+1.27.2 and 2.3.0, including real stdio tool discovery and invocation.
 On Windows, use the executables under `.venv-mcp\Scripts\`.
 
 ## Usage
