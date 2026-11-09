@@ -46,7 +46,7 @@ jobs:
 
       - name: Check MCP package in isolated env
         run: |
-          for mcp_version in 1.27.2 2.2.0; do
+          for mcp_version in 1.27.2 2.3.0; do
             mcp_venv="/tmp/agentsearch-mcp-${mcp_version}"
             python -m venv "${mcp_venv}"
             "${mcp_venv}/bin/python" -m pip install --upgrade pip
