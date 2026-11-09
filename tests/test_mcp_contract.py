@@ -21,7 +21,7 @@ def _server_module():
 
 def test_mcp_dependency_matches_verified_boundaries() -> None:
     pyproject = (MCP_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert '"mcp>=1.27.2,<2.3.0"' in pyproject
+    assert '"mcp>=1.27.2,<2.4.0"' in pyproject
 
 
 def test_mcp_transport_policy() -> None:

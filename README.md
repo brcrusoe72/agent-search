@@ -505,7 +505,7 @@ Environment variables (set in `docker-compose.yml` or `.env`):
 - Bearer auth is a simple local API gate, not a multi-user authorization system. Treat `AGENT_SEARCH_TOKEN` as a shared service token.
 - Rate limiting is in memory. It resets on restart and is per API process.
 - Query statistics use local SQLite with WAL and a bounded lock timeout. For high-volume multi-worker deployments, move query logging to an external database or telemetry backend.
-- The MCP package supports `mcp>=1.27.2,<2.3.0`. CI tests both 1.27.2 and 2.2.0 in isolated environments, including real stdio discovery, successful invocation, and error semantics. Upgrade deliberately and run the package/CI checks before publishing.
+- The MCP package supports `mcp>=1.27.2,<2.4.0`. CI tests both 1.27.2 and 2.3.0 in isolated environments, including real stdio discovery, successful invocation, and error semantics. Upgrade deliberately and run the package/CI checks before publishing.
 - Content extraction validates the starting URL and every redirect hop before fetching redirected content, but fetched third-party pages are still untrusted and are scrubbed before being returned.
 - Google Cache is unreliable because public cache availability changes frequently.
 - The Tor/private stack is intentionally slower than direct search.
